@@ -70,11 +70,28 @@ The bridge is honest about its limits, and so is the board:
   select this feed.
 - **No trade count**, so it is estimated from volume at a nominal 200-share average trade. Trade
   surge therefore tracks volume rather than measuring participation breadth independently.
-- **10 symbols per Robinhood call.** A wider watchlist needs batched calls; the bridge currently
-  sends the first 10 and says so in the `note` field.
-- This is a **watchlist board, not a market-wide ranking.** Cross-sectional percentile rank over 10
-  names means the top one is "the busiest of your ten" — which is a genuinely useful thing to watch,
-  but it is not "the highest-interest stock in the market."
+- **10 symbols per Robinhood call**, so a wider watchlist is fanned out across sequential batches
+  with `--batch-delay` (default 150 ms) between them. 200 symbols is 20 calls ≈ 3 s per refresh.
+  `--max-symbols` (default 200) is the ceiling; raise it knowingly.
+- This is a **watchlist board, not a market-wide ranking.** Cross-sectional percentile rank over your
+  N names means the top one is "the busiest of your N" — genuinely useful, but not "the
+  highest-interest stock in the market."
+
+### How wide can it go?
+
+Sequential and spaced on purpose: this is one person's brokerage account, not a data entitlement.
+
+| Watchlist | Calls per refresh | Roughly |
+| --- | --- | --- |
+| 10 | 1 | instant |
+| 50 | 5 | <1 s |
+| 200 | 20 | ~3 s |
+| 1,000 | 100 | ~15 s, and you are leaning on the API |
+| ~8,000 (all US equities) | 800 | not reachable — needs a real SIP feed |
+
+A 429 from Robinhood surfaces as a bridge error telling you to shrink the list or raise
+`--batch-delay`. If you want the whole market ranked, that is what the $199 full-SIP tier buys; no
+amount of batching gets a broker API there.
 
 ## Security notes
 

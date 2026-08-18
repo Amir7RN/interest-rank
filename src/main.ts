@@ -35,13 +35,25 @@ worker.onmessage = (ev: MessageEvent<FromWorker>) => {
   }
 };
 
+/**
+ * Expand a watchlist string. Plain tickers pass through; `*core` expands to the
+ * built-in liquid US list so a wide cross-section doesn't mean typing 200
+ * symbols by hand. `*core:50` takes the first 50.
+ */
+function expandSymbols(raw: string): string[] {
+  const out: string[] = [];
+  for (const token of raw.split(/[\s,]+/).map((t) => t.trim()).filter(Boolean)) {
+    const core = /^\*core(?::(\d+))?$/i.exec(token);
+    if (core) out.push(...CORE_SYMBOLS.slice(0, Number(core[1] ?? 150)));
+    else out.push(token.toUpperCase());
+  }
+  return [...new Set(out)];
+}
+
 function startFeed(s: AppSettings): void {
   feed?.stop();
   send({ type: 'reset' });
-  const symbols = s.symbols
-    .split(/[\s,]+/)
-    .map((x) => x.trim().toUpperCase())
-    .filter(Boolean);
+  const symbols = expandSymbols(s.symbols);
   feed = createFeed(s.feed, {
     apiKey: s.apiKey,
     symbols: symbols.length ? symbols : CORE_SYMBOLS.slice(0, 25),

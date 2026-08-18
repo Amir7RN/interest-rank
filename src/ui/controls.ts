@@ -110,7 +110,7 @@ export function mountControls(
         <label class="field"><span>API key</span><input type="password" data-key placeholder="stored in this browser only" value="${escapeAttr(settings.apiKey)}"></label>
         <label class="field"><span>Sim universe</span><input type="number" data-universe min="50" max="8000" step="50" value="${settings.universe}"></label>
         <label class="field wide" title="Local bars bridge for the Robinhood feed — see bridge/README.md"><span>Bridge URL</span><input type="text" data-bridge value="${escapeAttr(settings.bridgeUrl)}"></label>
-        <label class="field wide"><span>Watchlist (Robinhood / Finnhub)</span><input type="text" data-symbols value="${escapeAttr(settings.symbols)}"></label>
+        <label class="field wide" title="Comma-separated tickers. Use *core for the built-in liquid US list, or *core:50 for the first 50."><span>Watchlist (Robinhood / Finnhub) — <code>*core</code> for the built-in list</span><input type="text" data-symbols value="${escapeAttr(settings.symbols)}"></label>
       </div>
       <button data-restart class="btn">Reconnect feed</button>
       <p class="hint" data-feedhint></p>

@@ -44,6 +44,9 @@ const SNAPSHOT_FILE = path.resolve(HERE, String(args.file ?? 'snapshot.sample.js
 /** Replay speed for the snapshot provider: 1 = wall-clock. */
 const SPEED = Number(args.speed ?? 1);
 const LOOP = args.loop !== 'false';
+/** Symbol ceiling and inter-batch spacing for the Robinhood provider. */
+const MAX_SYMBOLS = Number(args['max-symbols'] ?? 200);
+const BATCH_DELAY_MS = Number(args['batch-delay'] ?? 150);
 
 /* ------------------------------------------------------------------ *
  * Provider: snapshot
@@ -52,6 +55,9 @@ const LOOP = args.loop !== 'false';
 let snapshot = null;
 let replayStart = 0;
 let firstBarMs = 0;
+/** length of the recording, used to advance timestamps on each loop */
+let spanMs = 0;
+let loops = 0;
 
 function loadSnapshot() {
   const raw = JSON.parse(fs.readFileSync(SNAPSHOT_FILE, 'utf8'));
@@ -59,6 +65,7 @@ function loadSnapshot() {
   if (bars.length === 0) throw new Error(`no bars in ${SNAPSHOT_FILE}`);
   snapshot = { ...raw, bars };
   firstBarMs = Date.parse(bars[0].t);
+  spanMs = Date.parse(bars[bars.length - 1].t) - firstBarMs + INTERVAL_SEC * 1000;
   replayStart = Date.now();
   const symbols = new Set(bars.map((b) => b.sym));
   console.log(
@@ -81,13 +88,24 @@ function snapshotBars(symbols) {
     const bar = snapshot.bars[replayCursor];
     if (Date.parse(bar.t) > now) break;
     replayCursor++;
-    if (!symbols.length || symbols.includes(bar.sym)) out.push(bar);
+    if (!symbols.length || symbols.includes(bar.sym)) {
+      // Advance timestamps by one recording-length per loop. Consumers dedupe
+      // on (symbol, timestamp), so replaying the original timestamps would look
+      // like bars they have already seen and the feed would go silent forever
+      // after the first pass.
+      out.push(loops === 0 ? bar : { ...bar, t: shiftTime(bar.t, loops * spanMs) });
+    }
   }
   if (replayCursor >= snapshot.bars.length && LOOP) {
     replayCursor = 0;
     replayStart = Date.now();
+    loops++;
   }
   return out;
+}
+
+function shiftTime(iso, deltaMs) {
+  return new Date(Date.parse(iso) + deltaMs).toISOString();
 }
 
 /* ------------------------------------------------------------------ *
@@ -103,12 +121,9 @@ const RH_HISTORICALS = 'https://api.robinhood.com/marketdata/historicals/';
  * see README.md. It is read from the environment and never logged, echoed on
  * /health, or written to disk by this process.
  */
-async function robinhoodBars(symbols) {
-  const token = process.env.RH_TOKEN;
-  if (!token) throw new Error('RH_TOKEN is not set — see bridge/README.md');
-  const batch = symbols.slice(0, 10);
+async function fetchBatch(symbols, token) {
   const url =
-    `${RH_HISTORICALS}?symbols=${encodeURIComponent(batch.join(','))}` +
+    `${RH_HISTORICALS}?symbols=${encodeURIComponent(symbols.join(','))}` +
     `&interval=15second&span=hour&bounds=regular`;
 
   const res = await fetch(url, {
@@ -116,6 +131,9 @@ async function robinhoodBars(symbols) {
   });
   if (res.status === 401 || res.status === 403) {
     throw new Error('Robinhood rejected the token (401/403) — it likely expired; refresh RH_TOKEN');
+  }
+  if (res.status === 429) {
+    throw new Error('Robinhood rate-limited the bridge (429) — reduce the watchlist or raise --batch-delay');
   }
   if (!res.ok) throw new Error(`Robinhood responded ${res.status}`);
 
@@ -136,6 +154,34 @@ async function robinhoodBars(symbols) {
     }
   }
   return out;
+}
+
+/**
+ * Robinhood accepts 10 symbols per call, so a wider watchlist is fanned out
+ * across sequential batches with a delay between them. Sequential and spaced
+ * on purpose: this is one person's account hitting a broker's API, not a market
+ * data entitlement, and hammering it in parallel is how you get rate-limited.
+ *
+ * That sets a practical ceiling. At the default 150 ms spacing, 200 symbols is
+ * 20 calls ≈ 3 s per refresh — comfortable. Several thousand is not reachable
+ * this way and should not be attempted; that needs a real SIP feed.
+ */
+async function robinhoodBars(symbols) {
+  const token = process.env.RH_TOKEN;
+  if (!token) throw new Error('RH_TOKEN is not set — see bridge/README.md');
+
+  const wanted = symbols.slice(0, MAX_SYMBOLS);
+  const out = [];
+  for (let i = 0; i < wanted.length; i += 10) {
+    const batch = wanted.slice(i, i + 10);
+    out.push(...(await fetchBatch(batch, token)));
+    if (i + 10 < wanted.length) await sleep(BATCH_DELAY_MS);
+  }
+  return out;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /** Only hand back bars newer than the newest one already delivered per symbol. */
@@ -196,7 +242,11 @@ const server = http.createServer(async (req, res) => {
       let note;
       if (PROVIDER === 'robinhood') {
         bars = onlyNew(await robinhoodBars(symbols));
-        if (symbols.length > 10) note = 'Robinhood returns at most 10 symbols per call';
+        const batches = Math.ceil(Math.min(symbols.length, MAX_SYMBOLS) / 10);
+        note = `${Math.min(symbols.length, MAX_SYMBOLS)} symbols in ${batches} batches`;
+        if (symbols.length > MAX_SYMBOLS) {
+          note += ` (watchlist truncated from ${symbols.length}; raise --max-symbols to lift it)`;
+        }
       } else {
         bars = snapshotBars(symbols);
         note = `replaying ${path.basename(SNAPSHOT_FILE)}${SPEED !== 1 ? ` at ${SPEED}x` : ''}`;

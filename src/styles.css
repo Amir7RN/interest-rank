@@ -197,6 +197,11 @@ table.board { width: 100%; border-collapse: collapse; font-variant-numeric: tabu
 }
 .btn:hover { background: #223251; }
 
+/* A class selector outranks the UA stylesheet's [hidden] { display: none },
+   so `display: grid` below would keep the empty state on screen underneath a
+   populated table. This rule wins it back. */
+.empty-state[hidden] { display: none; }
+
 .empty-state {
   display: grid;
   gap: 6px;
