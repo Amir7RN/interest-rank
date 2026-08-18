@@ -240,8 +240,38 @@ if (PROVIDER === 'robinhood' && !process.env.RH_TOKEN) {
   console.warn('[warn] provider=robinhood but RH_TOKEN is unset — /bars will return 502');
 }
 
+// A port collision is the most likely startup failure — usually a bridge left
+// running in another terminal. Say that, instead of dumping a stack trace.
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`\nPort ${PORT} is already in use — a bridge is probably still running.\n`);
+    console.error('Either use the one that is already up (check it with):');
+    console.error(`  curl http://127.0.0.1:${PORT}/health\n`);
+    console.error('or start this one on a different port, and set the same URL as "Bridge URL" in the app:');
+    console.error(`  node bridge/robinhood-bridge.mjs --port ${PORT + 1}\n`);
+    console.error('To stop the existing one:');
+    console.error(
+      process.platform === 'win32'
+        ? `  powershell -c "Stop-Process -Id (Get-NetTCPConnection -LocalPort ${PORT} -State Listen).OwningProcess -Force"\n`
+        : `  kill $(lsof -ti tcp:${PORT})\n`,
+    );
+    process.exit(1);
+  }
+  console.error(`bridge failed to start: ${err.message}`);
+  process.exit(1);
+});
+
 // 127.0.0.1 only: not reachable from another machine on the network.
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`bridge listening on http://127.0.0.1:${PORT}  (provider: ${PROVIDER})`);
   console.log(`  GET /bars?symbols=NVDA,AMD   GET /health`);
 });
+
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.on(signal, () => {
+    console.log('\nbridge stopped');
+    server.close(() => process.exit(0));
+    // Don't hang on a client holding the connection open.
+    setTimeout(() => process.exit(0), 500).unref();
+  });
+}
