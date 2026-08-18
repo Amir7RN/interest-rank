@@ -197,6 +197,8 @@ table.board { width: 100%; border-collapse: collapse; font-variant-numeric: tabu
 }
 .btn:hover { background: #223251; }
 
+.hint { margin: 10px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+
 .prose { color: var(--muted); font-size: 12px; line-height: 1.6; }
 .prose p { margin: 0 0 9px; }
 .prose strong { color: var(--fg); }

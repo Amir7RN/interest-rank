@@ -46,6 +46,7 @@ function startFeed(s: AppSettings): void {
     apiKey: s.apiKey,
     symbols: symbols.length ? symbols : CORE_SYMBOLS.slice(0, 25),
     universe: s.universe,
+    bridgeUrl: s.bridgeUrl,
   });
   feed.start(
     (bars) => send({ type: 'bars', bars }),

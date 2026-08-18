@@ -6,6 +6,7 @@ export interface AppSettings {
   apiKey: string;
   symbols: string;
   universe: number;
+  bridgeUrl: string;
   config: EngineConfig;
 }
 
@@ -17,6 +18,7 @@ export function loadSettings(): AppSettings {
     apiKey: '',
     symbols: 'AAPL,MSFT,NVDA,AMD,TSLA,SNDK,MU,INTC,SPY,QQQ',
     universe: 800,
+    bridgeUrl: 'http://127.0.0.1:8787',
     config: { ...DEFAULT_CONFIG, weights: { ...DEFAULT_CONFIG.weights } },
   };
   try {
@@ -40,6 +42,15 @@ export function saveSettings(s: AppSettings): void {
     /* private mode / quota — settings just won't persist */
   }
 }
+
+/** Per-feed caveats worth seeing before reading the board. */
+const FEED_HINT: Record<string, string> = {
+  sim: 'Synthetic tape generated in this tab. No network, no key, no real prices.',
+  robinhood:
+    'Needs the local bridge running (bridge/README.md). Bars are 15-second, split into 1-second slices — the aggregate is real, the path inside it is interpolated. No quote data, so quote churn is set to 0. Max 10 symbols per Robinhood call.',
+  polygon: 'Full-SIP 1-second aggregates. Trade count is derived from average trade size; no quote channel.',
+  finnhub: 'Trades aggregated locally into 1-second bars. Per-symbol subscribe only — the cross-section is your watchlist.',
+};
 
 interface NumField {
   key: keyof EngineConfig;
@@ -98,9 +109,11 @@ export function mountControls(
         <label class="field"><span>Source</span><select data-feed>${feedOpts}</select></label>
         <label class="field"><span>API key</span><input type="password" data-key placeholder="stored in this browser only" value="${escapeAttr(settings.apiKey)}"></label>
         <label class="field"><span>Sim universe</span><input type="number" data-universe min="50" max="8000" step="50" value="${settings.universe}"></label>
-        <label class="field wide"><span>Watchlist (Finnhub)</span><input type="text" data-symbols value="${escapeAttr(settings.symbols)}"></label>
+        <label class="field wide" title="Local bars bridge for the Robinhood feed — see bridge/README.md"><span>Bridge URL</span><input type="text" data-bridge value="${escapeAttr(settings.bridgeUrl)}"></label>
+        <label class="field wide"><span>Watchlist (Robinhood / Finnhub)</span><input type="text" data-symbols value="${escapeAttr(settings.symbols)}"></label>
       </div>
       <button data-restart class="btn">Reconnect feed</button>
+      <p class="hint" data-feedhint></p>
     </details>
     <details class="panel">
       <summary>Estimator</summary>
@@ -135,8 +148,24 @@ export function mountControls(
     onChange(settings, restart);
   };
 
+  const hintEl = root.querySelector<HTMLElement>('[data-feedhint]')!;
+  const renderHint = () => {
+    hintEl.textContent = FEED_HINT[settings.feed] ?? '';
+  };
+  renderHint();
+
   root.querySelector<HTMLSelectElement>('[data-feed]')!.addEventListener('change', (e) => {
     settings.feed = (e.target as HTMLSelectElement).value as FeedId;
+    // Robinhood carries no quote data, so the quote-churn signal would be a
+    // constant across every ticker — a tie that adds nothing but noise.
+    if (settings.feed === 'robinhood' && settings.config.weights.quotes > 0) {
+      settings.config.weights.quotes = 0;
+      const slider = root.querySelector<HTMLInputElement>('[data-w="quotes"]');
+      const out = root.querySelector<HTMLOutputElement>('[data-wout="quotes"]');
+      if (slider) slider.value = '0';
+      if (out) out.value = '0.00';
+    }
+    renderHint();
     emit(true);
   });
   root.querySelector<HTMLInputElement>('[data-key]')!.addEventListener('change', (e) => {
@@ -149,6 +178,10 @@ export function mountControls(
   });
   root.querySelector<HTMLInputElement>('[data-symbols]')!.addEventListener('change', (e) => {
     settings.symbols = (e.target as HTMLInputElement).value;
+    emit(true);
+  });
+  root.querySelector<HTMLInputElement>('[data-bridge]')!.addEventListener('change', (e) => {
+    settings.bridgeUrl = (e.target as HTMLInputElement).value.trim();
     emit(true);
   });
   root.querySelector<HTMLButtonElement>('[data-restart]')!.addEventListener('click', () => emit(true));

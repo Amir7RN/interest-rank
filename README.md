@@ -134,6 +134,7 @@ See `src/engine/vote.ts`.
 | Feed | Coverage | Key | Notes |
 | --- | --- | --- | --- |
 | **Simulator** | 800 synthetic symbols | none | 3-decade volume dispersion, intraday shape, injected attention events |
+| **Robinhood** | watchlist, 10 symbols per call | your own session token | 15-second OHLCV via the local bridge in `bridge/` — no subscription needed |
 | **Polygon / Massive** | full SIP, `A.*` 1-second aggregates | yes | the right shape for this engine |
 | **Finnhub** | per-symbol trades, aggregated locally | yes | no wildcard subscribe — watchlist only |
 
@@ -150,6 +151,24 @@ classification and it is the single biggest cost driver. A personal internal too
 the cheap tier; redistribution — publishing a page that shows the data to other people — moves you
 into display-fee territory. Check your vendor's terms before making a Pages deployment public with a
 real feed attached.
+
+### Robinhood without a subscription
+
+Your brokerage account already carries a real-time quote entitlement, so it can drive the board for a
+watchlist at no extra cost. The browser cannot reach Robinhood directly (no CORS, no anonymous
+access), so a small dependency-free Node process bridges it:
+
+```bash
+node bridge/robinhood-bridge.mjs        # replays real recorded bars, no login
+```
+
+Then pick **Robinhood (local bridge)** as the source. Full setup, including running it against your
+own live session, is in [`bridge/README.md`](bridge/README.md). Three limits are worth knowing before
+you read the board: the finest interval is **15 seconds** (split into 1-second slices, so the
+aggregate is real but the path inside it is interpolated), there is **no quote data** (quote churn is
+auto-zeroed), and Robinhood returns **10 symbols per call**. That makes this a watchlist board — #1
+means "busiest of your ten", not "highest interest in the market". The bridge is read-only market
+data; it has no order path and should never be given one.
 
 ### Adding another feed
 

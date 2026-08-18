@@ -24,4 +24,6 @@ export interface FeedOptions {
   symbols: string[];
   /** simulated universe size */
   universe: number;
+  /** base URL of the local bars bridge (Robinhood feed) */
+  bridgeUrl: string;
 }
