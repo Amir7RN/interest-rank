@@ -114,6 +114,12 @@ export interface Snapshot {
     computeMs: number;
     /** rank churn: mean |Δrank| across the published list */
     churn: number;
+    /** tickers receiving data but still filling their baselines */
+    warming: number;
+    /** warmed-up tickers excluded by the liquidity floors */
+    filtered: number;
+    /** baseline samples a ticker needs before it can rank */
+    warmupNeeded: number;
   };
 }
 

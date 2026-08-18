@@ -61,6 +61,9 @@ export class RobinhoodFeed implements Feed {
   private queues = new Map<string, Bar[]>();
   private msgs = 0;
   private note = '';
+  /** last poll outcome — the release timer must not paper over a failed poll */
+  private healthy = false;
+  private problem = '';
 
   constructor(opts: FeedOptions) {
     this.opts = opts;
@@ -77,7 +80,9 @@ export class RobinhoodFeed implements Feed {
       try {
         const res = await fetch(url, { headers: { accept: 'application/json' } });
         if (!res.ok) {
-          onStatus({ state: 'error', detail: `bridge ${res.status} ${res.statusText}` });
+          this.healthy = false;
+          this.problem = `bridge returned ${res.status} ${res.statusText}`;
+          onStatus({ state: 'error', detail: this.problem });
           return;
         }
         const payload = (await res.json()) as BridgeResponse;
@@ -92,15 +97,16 @@ export class RobinhoodFeed implements Feed {
           this.enqueue(bar, slices);
           queued++;
         }
+        this.healthy = true;
+        this.problem = '';
         onStatus({
           state: 'live',
           detail: `${symbols.length} symbols · ${queued} new bars${this.note ? ` · ${this.note}` : ''}`,
         });
       } catch (err) {
-        onStatus({
-          state: 'error',
-          detail: `bridge unreachable at ${base} — is it running?`,
-        });
+        this.healthy = false;
+        this.problem = `bridge unreachable at ${base} — is it running?`;
+        onStatus({ state: 'error', detail: this.problem });
         void err;
       }
     };
@@ -117,7 +123,13 @@ export class RobinhoodFeed implements Feed {
         if (queue.length === 0) this.queues.delete(sym);
       }
       if (out.length) onBars(out);
-      onStatus({ state: 'live', msgs: this.msgs });
+      // Report the real state: a healthy release clock says nothing about
+      // whether the bridge is still answering.
+      onStatus(
+        this.healthy
+          ? { state: 'live', msgs: this.msgs }
+          : { state: 'error', detail: this.problem, msgs: this.msgs },
+      );
       this.msgs = 0;
     };
 

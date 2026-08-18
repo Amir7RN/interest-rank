@@ -53,6 +53,15 @@ function startFeed(s: AppSettings): void {
     (st) => {
       if (st.msgs !== undefined) feedMsgRate = st.msgs;
       feedState = { ...feedState, ...st };
+      table.setFeedProblem(
+        feedState.state === 'error' || feedState.state === 'stopped'
+          ? `${feedState.detail ?? 'the feed is not connected'}${
+              s.feed === 'robinhood'
+                ? ' — start it with: node bridge/robinhood-bridge.mjs'
+                : ''
+            }`
+          : null,
+      );
       renderStatus();
     },
   );

@@ -197,6 +197,15 @@ table.board { width: 100%; border-collapse: collapse; font-variant-numeric: tabu
 }
 .btn:hover { background: #223251; }
 
+.empty-state {
+  display: grid;
+  gap: 6px;
+  padding: 28px 22px 32px;
+  max-width: 620px;
+}
+.empty-state b { color: var(--fg); font-size: 13px; font-weight: 600; }
+.empty-state span { color: var(--muted); font-size: 12px; line-height: 1.6; }
+
 .hint { margin: 10px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
 
 .prose { color: var(--muted); font-size: 12px; line-height: 1.6; }

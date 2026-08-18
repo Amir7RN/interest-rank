@@ -134,6 +134,8 @@ export class Engine {
 
     /* ---- stage 1: per-ticker signals, within-ticker normalization ---- */
     let nActive = 0;
+    let nWarming = 0;
+    let nFiltered = 0;
     let marketRatioSum = 0;
     let marketRatioN = 0;
 
@@ -198,12 +200,15 @@ export class Engine {
       s.quotesPerSec.push(nQuotes / Math.max(shape, 1e-3), t);
       if (hl > 0) s.atr.push(hl, t);
 
-      const eligible =
-        s.stale < STALE_LIMIT &&
-        s.advPerSec.count >= WARMUP &&
-        s.price >= cfg.minPrice &&
-        s.adv >= cfg.minAdv;
-      if (eligible) this.active[nActive++] = i;
+      // Split the ineligible cases apart: "still warming up" and "excluded by
+      // the liquidity floors" look identical on an empty board, and the fix
+      // for one is waiting while the fix for the other is changing a setting.
+      const fresh = s.stale < STALE_LIMIT;
+      const warm = s.advPerSec.count >= WARMUP;
+      const liquid = s.price >= cfg.minPrice && s.adv >= cfg.minAdv;
+      if (fresh && warm && liquid) this.active[nActive++] = i;
+      else if (fresh && !warm) nWarming++;
+      else if (fresh && warm) nFiltered++;
     }
 
     if (marketRatioN > 30) this.profile.observeMarket(bucket, marketRatioSum / marketRatioN);
@@ -365,6 +370,9 @@ export class Engine {
         msgsPerSec: 0,
         computeMs: performance.now() - t0,
         churn: churnN ? churnSum / churnN : 0,
+        warming: nWarming,
+        filtered: nFiltered,
+        warmupNeeded: WARMUP,
       },
     };
   }

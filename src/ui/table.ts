@@ -35,6 +35,8 @@ const SPARK_H = 18;
 export class RankTable {
   private rows = new Map<string, RowEls>();
   private tbody: HTMLTableSectionElement;
+  private empty: HTMLElement | null = null;
+  private feedProblem: string | null = null;
 
   private root: HTMLElement;
 
@@ -61,11 +63,62 @@ export class RankTable {
           </tr>
         </thead>
         <tbody></tbody>
-      </table>`;
+      </table>
+      <div class="empty-state" hidden></div>`;
     this.tbody = this.root.querySelector('tbody')!;
+    this.empty = this.root.querySelector('.empty-state');
+  }
+
+  /**
+   * An empty board is ambiguous — warming up, misconfigured, and disconnected
+   * all look the same. Say which one it is, and what to do about it.
+   */
+  private renderEmptyState(snap: Snapshot): void {
+    const el = this.empty;
+    if (!el) return;
+    if (snap.rows.length > 0) {
+      el.hidden = true;
+      return;
+    }
+    const s = snap.stats;
+    let title: string;
+    let detail: string;
+
+    if (this.feedProblem) {
+      title = 'No data reaching the board';
+      detail = this.feedProblem;
+    } else if (s.universe === 0) {
+      title = 'Waiting for the first bars';
+      detail =
+        'The feed is connected but has not delivered any data yet. Outside market hours most feeds are silent — the simulator source works any time.';
+    } else if (s.warming > 0) {
+      title = 'Warming up baselines';
+      detail =
+        `${s.warming} of ${s.universe} tickers are still filling their per-ticker baselines. ` +
+        `Each needs about ${s.warmupNeeded} seconds of data before it can be scored — ranking a ticker ` +
+        `against a baseline it has not established yet would be noise, not attention.`;
+    } else if (s.filtered > 0 && s.active === 0) {
+      title = 'Every ticker is filtered out';
+      detail =
+        `${s.filtered} tickers have data but fall below the liquidity floors. Lower "Min price" or ` +
+        `"Min ADV" under Estimator, or add more liquid symbols to the watchlist.`;
+    } else {
+      title = 'Nothing above the entry threshold';
+      detail =
+        `${s.active} tickers are eligible but none clear the entry threshold. Lower "Enter θ" under ` +
+        `Estimator to admit quieter names.`;
+    }
+    el.innerHTML = `<b>${title}</b><span>${detail}</span>`;
+    el.hidden = false;
+  }
+
+  /** Feed-level trouble, shown in the empty state — the table cannot infer it. */
+  setFeedProblem(message: string | null): void {
+    this.feedProblem = message;
   }
 
   render(snap: Snapshot): void {
+    this.renderEmptyState(snap);
     const seen = new Set<string>();
     // FLIP: record positions before the DOM moves
     const before = new Map<string, number>();
