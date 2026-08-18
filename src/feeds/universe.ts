@@ -1,0 +1,55 @@
+/** A liquid, recognizable slice of the US tape — enough breadth that the
+ *  cross-sectional ranking is meaningful without a paid subscription. */
+const RAW = [
+  'AAPL','MSFT','NVDA','AMZN','GOOGL','META','TSLA','AVGO','AMD','NFLX',
+  'INTC','MU','QCOM','TXN','ARM','SMCI','MRVL','ON','SWKS','TER',
+  'SNDK','WDC','STX','DELL','HPQ','HPE','NTAP','PSTG','ANET','CSCO',
+  'CRM','ORCL','ADBE','NOW','SNOW','DDOG','MDB','NET','CRWD','PANW',
+  'ZS','OKTA','TEAM','SHOP','SQ','PYPL','COIN','HOOD','SOFI','AFRM',
+  'JPM','BAC','WFC','GS','MS','C','SCHW','AXP','BLK','SPGI',
+  'BRK.B','V','MA','COF','USB','PNC','TFC','MET','PRU','AIG',
+  'XOM','CVX','COP','SLB','OXY','PSX','VLO','MPC','HAL','DVN',
+  'FCX','NEM','GOLD','AA','X','CLF','NUE','STLD','MOS','CF',
+  'JNJ','PFE','MRK','LLY','ABBV','BMY','AMGN','GILD','VRTX','REGN',
+  'UNH','CVS','CI','HUM','ELV','HCA','ISRG','SYK','BSX','MDT',
+  'MRNA','BNTX','NVAX','SRPT','ALNY','BMRN','INCY','EXAS','ILMN','TMO',
+  'WMT','COST','TGT','HD','LOW','DG','DLTR','KR','ROST','TJX',
+  'MCD','SBUX','CMG','YUM','DRI','DPZ','QSR','WEN','PZZA','CAKE',
+  'KO','PEP','PG','CL','KMB','GIS','K','HSY','MDLZ','STZ',
+  'DIS','CMCSA','WBD','PARA','LYV','ROKU','SPOT','TTD','SNAP','PINS',
+  'UBER','LYFT','DASH','ABNB','BKNG','EXPE','MAR','HLT','RCL','CCL',
+  'NCLH','DAL','UAL','AAL','LUV','ALK','JBLU','BA','LMT','RTX',
+  'NOC','GD','HII','LHX','TDG','HWM','GE','HON','MMM','CAT',
+  'DE','CMI','PCAR','ETN','EMR','ROK','PH','ITW','SWK','FAST',
+  'F','GM','RIVN','LCID','NIO','XPEV','LI','STLA','HMC','TM',
+  'T','VZ','TMUS','LUMN','CHTR','DISH','AMT','CCI','SBAC','EQIX',
+  'PLD','SPG','O','VICI','WELL','AVB','EQR','PSA','DLR','IRM',
+  'NEE','DUK','SO','D','AEP','EXC','SRE','XEL','ED','PEG',
+  'PLTR','SNAP','U','RBLX','DKNG','PENN','MSTR','MARA','RIOT','CLSK',
+  'HUT','BITF','WULF','IREN','CIFR','GLXY','BTBT','CAN','SOS','EBON',
+  'GME','AMC','BBBY','KOSS','EXPR','CLOV','WISH','SPCE','OPEN','WKHS',
+  'PTON','CHWY','ETSY','W','CVNA','CARG','VRM','BYND','OATV','TTWO',
+  'EA','RBLX','ATVI','ZNGA','SE','BABA','JD','PDD','BIDU','NTES',
+  'TCEHY','TSM','ASML','SONY','SAP','SHEL','BP','TTE','E','EQNR',
+  'SPY','QQQ','IWM','DIA','VXX','UVXY','SQQQ','TQQQ','SOXL','SOXS',
+  'ARKK','XLF','XLE','XLK','XLV','XLI','XLU','XLP','XLY','XLB',
+];
+
+export const CORE_SYMBOLS: string[] = Array.from(new Set(RAW));
+
+/** Deterministic pseudo-symbols to pad the simulated universe out to size. */
+export function synthUniverse(n: number): string[] {
+  const out = CORE_SYMBOLS.slice(0, n);
+  const A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  let i = 0;
+  while (out.length < n) {
+    const a = A[i % 26];
+    const b = A[Math.floor(i / 26) % 26];
+    const c = A[Math.floor(i / 676) % 26];
+    const d = A[Math.floor(i / 17576) % 26];
+    const sym = `${a}${b}${c}${d}`;
+    if (!CORE_SYMBOLS.includes(sym)) out.push(sym);
+    i++;
+  }
+  return out;
+}

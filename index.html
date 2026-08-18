@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Interest Rank — live cross-sectional attention board</title>
+    <meta
+      name="description"
+      content="Ranks US equities by real-time attention: relative volume, return z-score, trade surge, quote churn and range expansion, normalized within-ticker then cross-sectionally, with ensemble robustness voting."
+    />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>📈</text></svg>" />
+  </head>
+  <body>
+    <header class="topbar">
+      <h1>Interest&nbsp;Rank</h1>
+      <div id="status" class="status"></div>
+      <div id="clock" class="clock"></div>
+    </header>
+    <main>
+      <section id="board" class="board-wrap"></section>
+      <aside id="controls" class="side"></aside>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

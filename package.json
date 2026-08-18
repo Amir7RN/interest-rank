@@ -1,0 +1,19 @@
+{
+  "name": "interest-rank",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Real-time cross-sectional stock attention ranking with ensemble robustness voting",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --experimental-strip-types test/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10"
+  }
+}
