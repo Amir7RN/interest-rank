@@ -56,6 +56,8 @@ const BATCH_DELAY_MS = Number(args['batch-delay'] ?? 150);
  * ------------------------------------------------------------------ */
 
 let snapshot = null;
+/** Symbols the recording actually contains — its hard ceiling on coverage. */
+let snapshotSymbols = new Set();
 let replayStart = 0;
 let firstBarMs = 0;
 /** length of the recording, used to advance timestamps on each loop */
@@ -70,11 +72,12 @@ function loadSnapshot() {
   firstBarMs = Date.parse(bars[0].t);
   spanMs = Date.parse(bars[bars.length - 1].t) - firstBarMs + INTERVAL_SEC * 1000;
   replayStart = Date.now();
-  const symbols = new Set(bars.map((b) => b.sym));
+  snapshotSymbols = new Set(bars.map((b) => b.sym));
   console.log(
-    `[snapshot] ${bars.length} bars, ${symbols.size} symbols, ` +
+    `[snapshot] ${bars.length} bars, ${snapshotSymbols.size} symbols, ` +
       `${new Date(firstBarMs).toISOString()} -> ${bars[bars.length - 1].t}`,
   );
+  console.log(`[snapshot] covers ${[...snapshotSymbols].join(', ')} — a wider watchlist cannot exceed this`);
 }
 
 /**
@@ -338,6 +341,16 @@ const server = http.createServer(async (req, res) => {
       } else {
         bars = snapshotBars(symbols);
         note = `replaying ${path.basename(SNAPSHOT_FILE)}${SPEED !== 1 ? ` at ${SPEED}x` : ''}`;
+        // A recording covers the symbols it was recorded from and no others, so
+        // asking for a wider watchlist silently returns a narrow board. Say
+        // that here rather than letting "universe 3" be the only clue.
+        const missing = symbols.filter((s) => !snapshotSymbols.has(s));
+        note += ` — recording has ${snapshotSymbols.size} symbols (${[...snapshotSymbols].join(', ')})`;
+        if (missing.length) {
+          note +=
+            `; ${missing.length} of ${symbols.length} requested are not in it` +
+            ` — use --provider robinhood for a live watchlist`;
+        }
       }
       lastError = null;
       return json(res, 200, { interval_sec: INTERVAL_SEC, bars, note });
