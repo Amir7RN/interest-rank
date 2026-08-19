@@ -1,4 +1,4 @@
-import { FEED_IDS, FEED_LABEL, type FeedId } from '../feeds/index.ts';
+import { FEED_IDS, FEED_LABEL, FEEDS_WITHOUT_QUOTES, type FeedId } from '../feeds/index.ts';
 import { DEFAULT_CONFIG, SIGNAL_KEYS, SIGNAL_LABEL, type EngineConfig, type SignalKey } from '../types.ts';
 
 export interface AppSettings {
@@ -7,6 +7,10 @@ export interface AppSettings {
   symbols: string;
   universe: number;
   bridgeUrl: string;
+  /** Massive replay: seconds of tape per wall-clock second */
+  replaySpeed: number;
+  /** Massive replay: YYYY-MM-DD, empty for the latest session with data */
+  replayDate: string;
   config: EngineConfig;
 }
 
@@ -19,6 +23,8 @@ export function loadSettings(): AppSettings {
     symbols: 'AAPL,MSFT,NVDA,AMD,TSLA,SNDK,MU,INTC,SPY,QQQ',
     universe: 800,
     bridgeUrl: 'http://127.0.0.1:8787',
+    replaySpeed: 10,
+    replayDate: '',
     config: { ...DEFAULT_CONFIG, weights: { ...DEFAULT_CONFIG.weights } },
   };
   try {
@@ -46,8 +52,12 @@ export function saveSettings(s: AppSettings): void {
 /** Per-feed caveats worth seeing before reading the board. */
 const FEED_HINT: Record<string, string> = {
   sim: 'Synthetic tape generated in this tab. No network, no key, no real prices.',
+  replay:
+    "Real prints, yesterday. Massive's free Basic tier includes historical minute bars but not today's tape, so this downloads one completed session and plays it back — one request per symbol, so keep the watchlist short. Minute bars are sliced down to the step, so the aggregate is real and the path inside it is interpolated. No quotes, so quote churn is set to 0. At speed S a τ of N seconds covers N/S seconds of market time: divide the τ settings by the speed to keep them meaning what they mean live.",
   robinhood:
     'Needs the local bridge running (bridge/README.md). Bars are 15-second, split into 1-second slices — the aggregate is real, the path inside it is interpolated. No quote data, so quote churn is set to 0. Max 10 symbols per Robinhood call.',
+  massive:
+    "Full-SIP 1-second aggregates from massive.com. Needs a real-time plan — the free tier has no socket and the delayed tiers stream 15-minute-old bars, which is not a ranking of now. Trade count is derived from average trade size; no quote channel.",
   polygon: 'Full-SIP 1-second aggregates. Trade count is derived from average trade size; no quote channel.',
   finnhub: 'Trades aggregated locally into 1-second bars. Per-symbol subscribe only — the cross-section is your watchlist.',
 };
@@ -110,7 +120,9 @@ export function mountControls(
         <label class="field"><span>API key</span><input type="password" data-key placeholder="stored in this browser only" value="${escapeAttr(settings.apiKey)}"></label>
         <label class="field"><span>Sim universe</span><input type="number" data-universe min="50" max="8000" step="50" value="${settings.universe}"></label>
         <label class="field wide" title="Local bars bridge for the Robinhood feed — see bridge/README.md"><span>Bridge URL</span><input type="text" data-bridge value="${escapeAttr(settings.bridgeUrl)}"></label>
-        <label class="field wide" title="Comma-separated tickers. Use *core for the built-in liquid US list, or *core:50 for the first 50."><span>Watchlist (Robinhood / Finnhub) — <code>*core</code> for the built-in list</span><input type="text" data-symbols value="${escapeAttr(settings.symbols)}"></label>
+        <label class="field" title="Massive replay: seconds of tape consumed per wall-clock second. Raising it shortens every time constant in market time by the same factor."><span>Replay speed (x)</span><input type="number" data-speed min="1" max="60" step="1" value="${settings.replaySpeed}"></label>
+        <label class="field" title="Massive replay: session to play back. Leave empty to use the most recent session with data."><span>Replay date</span><input type="date" data-replaydate value="${escapeAttr(settings.replayDate)}"></label>
+        <label class="field wide" title="Comma-separated tickers. *core is the built-in liquid US list (*core:50 for the first 50). *scan takes the current Robinhood screener results from the bridge, in the scanner's own order (*scan:20 for its top 20)."><span>Watchlist — <code>*core</code> built-in list, <code>*scan</code> Robinhood screener</span><input type="text" data-symbols value="${escapeAttr(settings.symbols)}"></label>
       </div>
       <button data-restart class="btn">Reconnect feed</button>
       <p class="hint" data-feedhint></p>
@@ -156,9 +168,9 @@ export function mountControls(
 
   root.querySelector<HTMLSelectElement>('[data-feed]')!.addEventListener('change', (e) => {
     settings.feed = (e.target as HTMLSelectElement).value as FeedId;
-    // Robinhood carries no quote data, so the quote-churn signal would be a
-    // constant across every ticker — a tie that adds nothing but noise.
-    if (settings.feed === 'robinhood' && settings.config.weights.quotes > 0) {
+    // Some sources carry no quote data, and there the quote-churn signal would
+    // be a constant across every ticker — a tie that adds nothing but noise.
+    if (FEEDS_WITHOUT_QUOTES.includes(settings.feed) && settings.config.weights.quotes > 0) {
       settings.config.weights.quotes = 0;
       const slider = root.querySelector<HTMLInputElement>('[data-w="quotes"]');
       const out = root.querySelector<HTMLOutputElement>('[data-wout="quotes"]');
@@ -182,6 +194,14 @@ export function mountControls(
   });
   root.querySelector<HTMLInputElement>('[data-bridge]')!.addEventListener('change', (e) => {
     settings.bridgeUrl = (e.target as HTMLInputElement).value.trim();
+    emit(true);
+  });
+  root.querySelector<HTMLInputElement>('[data-speed]')!.addEventListener('change', (e) => {
+    settings.replaySpeed = clampInt((e.target as HTMLInputElement).value, 1, 60, 10);
+    emit(true);
+  });
+  root.querySelector<HTMLInputElement>('[data-replaydate]')!.addEventListener('change', (e) => {
+    settings.replayDate = (e.target as HTMLInputElement).value.trim();
     emit(true);
   });
   root.querySelector<HTMLButtonElement>('[data-restart]')!.addEventListener('click', () => emit(true));

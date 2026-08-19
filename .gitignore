@@ -7,3 +7,5 @@ dist/
 # bridge secrets and personal recordings
 bridge/.env
 bridge/snapshot.json
+# generated from your own Robinhood screener; regenerate rather than commit
+bridge/scan.json

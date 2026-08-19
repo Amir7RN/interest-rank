@@ -26,4 +26,8 @@ export interface FeedOptions {
   universe: number;
   /** base URL of the local bars bridge (Robinhood feed) */
   bridgeUrl: string;
+  /** Massive replay: seconds of tape consumed per wall-clock second */
+  replaySpeed: number;
+  /** Massive replay: session date as YYYY-MM-DD, empty for the latest available */
+  replayDate: string;
 }

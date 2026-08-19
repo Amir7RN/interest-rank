@@ -8,6 +8,7 @@ No dependencies. No build step. Node 18+.
 
 ```
 GET /bars?symbols=NVDA,AMD,SNDK   ->  { interval_sec, bars: [{sym,t,o,h,l,c,v}], note? }
+GET /scan                         ->  { title, symbols: [...], rows: [...], note? }
 GET /health                       ->  { ok, provider, ... }
 ```
 
@@ -92,6 +93,70 @@ Sequential and spaced on purpose: this is one person's brokerage account, not a 
 A 429 from Robinhood surfaces as a bridge error telling you to shrink the list or raise
 `--batch-delay`. If you want the whole market ranked, that is what the $199 full-SIP tier buys; no
 amount of batching gets a broker API there.
+
+## The screener: `GET /scan`
+
+Robinhood's screener answers a different question from this board. The screener says *which* names
+are worth watching ("relative volume > 3, price > $5"); the board says *how they rank against each
+other right now*, with a normalized composite and a robustness vote. So the screener feeds the
+watchlist rather than competing with the score.
+
+Concretely: type `*scan` in the app's watchlist box and the board takes its universe from the current
+screener results, in the scanner's own order. `*scan:20` takes its top 20, and `*scan, SPY` keeps the
+scanner's sort and appends SPY.
+
+The screener is not part of the public market-data API this bridge already speaks, so results reach
+it as a **file** rather than a live call:
+
+```bash
+node bridge/robinhood-bridge.mjs --scan-file scan.json
+```
+
+The file is re-read on every request, so regenerating it takes effect without restarting the bridge.
+Expected shape — extra keys per row are passed through untouched, and `symbols` is derived from
+`rows` in order:
+
+```json
+{
+  "title": "Unusual volume",
+  "generated_at": "2026-08-18T13:45:00Z",
+  "rows": [
+    { "symbol": "NVDA", "relative_volume": 4.2 },
+    { "symbol": "AMD",  "relative_volume": 3.1 }
+  ]
+}
+```
+
+Anything that can reach the scanner can write that file: the Robinhood MCP server's `run_scan`, a
+scheduled job, or a manual export from Legend. `scan-import.mjs` converts any of those into the shape
+above:
+
+```bash
+node bridge/scan-import.mjs --in run-scan-result.json --limit 40
+```
+
+It accepts the MCP result envelope, a bare `{results: [...]}`, or a plain array; normalizes tickers;
+turns the scanner's stringified cells back into numbers; and stamps `generated_at`. `/scan` reports
+that stamp as an age and the app shows it in the status bar, because **a stale scan is the failure
+mode here** — a screener run before the open is a list of yesterday's ideas, and nothing downstream
+can tell.
+
+### Relative volume needs a daily interval
+
+Worth knowing, because it produces a scan that looks fine and is not. Robinhood's relative-volume
+filter at `interval: 1m` degenerates outside regular hours: the column comes back equal to raw
+`Volume` rather than a ratio, `> 2` passes for essentially everything, and sorting by it gives you
+the largest-volume names — mega-caps and bond ETFs — dressed up as an unusual-activity screen. That
+is exactly the failure the board's percentile normalization exists to avoid, so importing it would
+poison the watchlist at the source.
+
+Use `interval: 1d, length: 30`. The filter then resolves to
+`dayVolume / volumeAvg(candlePeriod="1d", session="all")`, which is the ratio the name implies. The
+tradeoff is honest: with the market closed `dayVolume` is ~0, so the scan correctly matches nothing
+rather than confidently matching everything. Refresh it during regular hours.
+
+Missing file, empty results, and malformed JSON are three different problems with three different
+fixes, so they produce three different messages rather than one empty board.
 
 ## Security notes
 

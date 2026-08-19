@@ -15,7 +15,7 @@ key in.
 ```bash
 npm install
 npm run dev        # http://localhost:5173
-npm test           # 17 engine tests
+npm test           # 26 engine + tape tests
 npm run build      # -> dist/
 ```
 
@@ -37,6 +37,14 @@ Then in the repo: **Settings → Pages → Build and deployment → Source: GitH
 workflow (`.github/workflows/deploy.yml`) builds and publishes on every push to `main`, so the site
 lands at `https://<you>.github.io/<repo>/`. `vite.config.ts` uses `base: './'`, so the subdirectory
 path works without further configuration.
+
+> **That Source setting is not optional, and getting it wrong looks like a bug in the app.** If Pages
+> is left on *Deploy from a branch*, GitHub serves the repository root — including the unbuilt
+> `index.html`, whose `<script src="/src/main.ts">` points at TypeScript that no browser can run. The
+> page loads, renders nothing, and reports no error; `npm run dev` keeps working because Vite
+> compiles that file on the fly. To tell the two apart, view source on the deployed page: the built
+> one references `./assets/index-<hash>.js`, and anything still pointing at `/src/main.ts` is the raw
+> branch being served.
 
 ---
 
@@ -134,12 +142,14 @@ See `src/engine/vote.ts`.
 | Feed | Coverage | Key | Notes |
 | --- | --- | --- | --- |
 | **Simulator** | 800 synthetic symbols | none | 3-decade volume dispersion, intraday shape, injected attention events |
+| **Massive replay** | watchlist, one request per symbol | free Basic key | a completed session's minute bars played back as a tape — real prints, yesterday |
 | **Robinhood** | watchlist, 10 symbols per call | your own session token | 15-second OHLCV via the local bridge in `bridge/` — no subscription needed |
-| **Polygon / Massive** | full SIP, `A.*` 1-second aggregates | yes | the right shape for this engine |
+| **Massive** | full SIP, `A.*` 1-second aggregates | real-time plan | the right shape for this engine |
+| **Polygon** | full SIP, `A.*` 1-second aggregates | real-time plan | same wire protocol as Massive, different host |
 | **Finnhub** | per-symbol trades, aggregated locally | yes | no wildcard subscribe — watchlist only |
 
 Keys are stored in `localStorage` in your browser and are never sent anywhere except to the vendor's
-own WebSocket.
+own WebSocket or REST endpoint.
 
 To rank *all* US equities you need the consolidated SIP feed, not a single-exchange feed: IEX-only
 feeds cover roughly 2–3% of volume, which badly distorts a volume-based ranking. Prefer the vendor's
@@ -151,6 +161,53 @@ classification and it is the single biggest cost driver. A personal internal too
 the cheap tier; redistribution — publishing a page that shows the data to other people — moves you
 into display-fee territory. Check your vendor's terms before making a Pages deployment public with a
 real feed attached.
+
+### Massive: which tier buys what
+
+Massive is Polygon under the hood — same REST paths, same `wss://.../stocks` protocol, so the
+**Massive** and **Polygon** entries above are one implementation (`src/feeds/sip.ts`) with two hosts.
+The tiers are not interchangeable for this board, and the difference was checked against the live API
+rather than read off a marketing page:
+
+| Tier | Live socket | What the REST API returns | Drives this board? |
+| --- | --- | --- | --- |
+| Basic (free) | no | history through the **previous** session; today is `NOT_ENTITLED` | replay feed only |
+| Starter / Developer | yes | 15-minute delayed | no — a 15-minute-old attention ranking is not a ranking of *now* |
+| Advanced | yes | real-time full market | yes |
+
+So the live **Massive** feed needs the real-time tier. Nothing in the code can work around that: a
+delayed socket produces a correct-looking board that is confidently 15 minutes late, which is worse
+than an obviously empty one.
+
+Note also that an **MCP connection to Massive is not a key this app can use.** MCP authenticates a
+desktop client over OAuth; this is a static site with no backend, so it needs a plain REST/socket key
+created at massive.com and pasted into the API key box. The API sends permissive CORS headers, so the
+browser can call it directly once it has one.
+
+### Massive replay — real prints on the free tier
+
+The free Basic tier withholds today's tape but includes **historical minute aggregates**, which is
+enough to drive the engine off a real session. Pick **Massive replay**, paste a free key, and the
+feed walks back from yesterday to the most recent date that actually returns bars (skipping weekends,
+and skipping holidays for free by treating "no bars" as "try the day before"), downloads one
+symbol-day per watchlist name, and plays it back on a loop.
+
+Four things to know before reading that board:
+
+- **One request per symbol.** Keep the watchlist short. The loader goes one at a time, backs off on
+  429 and keeps the wider gap, and starts replaying as soon as the first symbol lands — later
+  arrivals join at the current tape position rather than rewinding it.
+- **Minute resolution.** Each engine step takes a slice of the minute, with volume and trade count
+  prorated and price interpolated open-to-close. The minute aggregate is real; the path inside it is
+  invented. The minute's true high and low are folded into whichever slice contains the middle of
+  that minute, so a range expansion registers once instead of once per slice.
+- **No quotes, but real trade counts.** Quote churn is auto-zeroed. Trade count comes from the
+  aggregate's own `n`, so it is a measurement here rather than the volume/average-size estimate the
+  live socket feeds have to use.
+- **Speed rescales the time constants.** The engine steps once per wall-clock second regardless, so
+  at speed S each step swallows S seconds of tape and a τ of N seconds covers N/S seconds of market
+  time. The default is 10x — a full session in about 40 minutes. Divide the τ settings by the speed
+  if you want them to mean what they mean live.
 
 ### Robinhood without a subscription
 
@@ -170,6 +227,30 @@ auto-zeroed), and Robinhood returns **10 symbols per call**. That makes this a w
 means "busiest of your ten", not "highest interest in the market". The bridge is read-only market
 data; it has no order path and should never be given one.
 
+### The Robinhood screener as the watchlist
+
+Robinhood's screener and this board answer different questions, and it is worth being precise about
+which. The screener is a **filter**: `relative volume > 3` is a threshold, evaluated per name, with
+no cross-sectional normalization, no time-of-day baseline, no blend, and no notion of whether a
+placement is stable. Its finest interval is one minute. This board is a **ranker**: five signals,
+z-scored within each ticker against a time-of-day conditional baseline, percentile-ranked across the
+cross-section, blended, smoothed, and put to an ensemble vote — recomputed every second.
+
+So they compose rather than compete. The screener decides *which* names are worth the bar budget —
+which matters, because every real feed here is per-symbol expensive — and the board ranks whatever it
+hands over. Type `*scan` in the watchlist box:
+
+| Token | Effect |
+| --- | --- |
+| `*scan` | every symbol the screener returned, in the scanner's own order |
+| `*scan:20` | its top 20 |
+| `*scan, SPY` | the scanner's list, then SPY appended |
+
+`*scan` reads the bridge's `/scan` endpoint, so the bridge must be running — see
+[`bridge/README.md`](bridge/README.md) for the file format and how results get there. The status bar
+shows how old the scan is, because a screener run before the open is a list of yesterday's ideas and
+the board itself cannot tell.
+
 ### Adding another feed
 
 Implement `Feed` from `src/feeds/types.ts` (`start(onBars, onStatus)` / `stop()`), emit `Bar`
@@ -181,7 +262,7 @@ changes.
 ## Architecture
 
 ```
-WebSocket feed (SIP 1s aggregates, or the simulator)
+WebSocket feed (SIP 1s aggregates), REST replay tape, or the simulator
    |  bars
 main thread  ──postMessage──▶  Web Worker
                                  |
@@ -216,11 +297,16 @@ forecast horizon) is live and persisted to `localStorage`.
 
 ## Tests
 
-`npm test` runs 17 tests covering the estimators (EWMA convergence, time-decay, z on a surge),
+`npm test` runs 26 tests covering the estimators (EWMA convergence, time-decay, z on a surge),
 window statistics (median/MAD outlier resistance, slope), cross-sectional ranking (fat-tail bounding,
 tie handling), the ensemble vote, the intraday profile, and three end-to-end engine properties: a
 volume surge reaches #1, hysteresis keeps churn under 1 rank/second on pure noise, and the liquidity
 floor excludes cheap or thin names.
+
+The replay tape has its own suite (`test/tape.test.ts`): session dates walk backwards past weekends,
+slicing a whole minute reproduces that minute, volume and trade count are conserved when a minute is
+split, the high and low land in exactly one slice rather than every slice, gaps produce no bar rather
+than a zero-volume one, and a stale cursor does not swallow the first minute when the tape loops.
 
 ## Disclaimer
 

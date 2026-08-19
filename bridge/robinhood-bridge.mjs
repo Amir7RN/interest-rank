@@ -8,6 +8,7 @@
  * them to the page in one normalized shape.
  *
  *   GET /bars?symbols=NVDA,AMD,SNDK   ->  {interval_sec, bars: [...], note?}
+ *   GET /scan                         ->  {title, symbols: [...], rows: [...], note?}
  *   GET /health                       ->  {ok, provider, symbols, ...}
  *
  * Deliberate constraints:
@@ -41,6 +42,8 @@ const PORT = Number(args.port ?? process.env.BRIDGE_PORT ?? 8787);
 const PROVIDER = String(args.provider ?? process.env.BRIDGE_PROVIDER ?? 'snapshot');
 const INTERVAL_SEC = Number(args.interval ?? 15);
 const SNAPSHOT_FILE = path.resolve(HERE, String(args.file ?? 'snapshot.sample.json'));
+/** Scanner results, written by whatever runs the Robinhood screener. See /scan below. */
+const SCAN_FILE = path.resolve(HERE, String(args['scan-file'] ?? 'scan.json'));
 /** Replay speed for the snapshot provider: 1 = wall-clock. */
 const SPEED = Number(args.speed ?? 1);
 const LOOP = args.loop !== 'false';
@@ -198,6 +201,72 @@ function onlyNew(bars) {
 }
 
 /* ------------------------------------------------------------------ *
+ * Scanner results
+ * ------------------------------------------------------------------ */
+
+/**
+ * Robinhood's screener ("Legend scanner") picks *which* names are worth
+ * watching; this board ranks them once they are picked. The two answer
+ * different questions, so the scanner feeds the watchlist rather than replacing
+ * the score.
+ *
+ * The screener is not on the public market-data API this bridge already speaks,
+ * so results arrive here as a file rather than a live call. Anything that can
+ * reach the scanner writes it — the Robinhood MCP server's `run_scan`, a
+ * scheduled job, or an export from Legend — and this endpoint serves whatever
+ * is currently on disk, re-read per request so a regenerated file takes effect
+ * without a restart.
+ *
+ * Expected shape (extra keys are passed through untouched):
+ *
+ *   {
+ *     "title": "Unusual volume",
+ *     "generated_at": "2026-08-18T13:45:00Z",
+ *     "rows": [ { "symbol": "NVDA", "relative_volume": 4.2 }, ... ]
+ *   }
+ *
+ * `symbols` is derived from `rows` in order, so the scanner's own sort is what
+ * the page receives.
+ */
+function readScan() {
+  if (!fs.existsSync(SCAN_FILE)) {
+    return {
+      title: null,
+      symbols: [],
+      rows: [],
+      note: `no scan file at ${path.basename(SCAN_FILE)} — generate one, or pass --scan-file`,
+    };
+  }
+  const raw = JSON.parse(fs.readFileSync(SCAN_FILE, 'utf8'));
+  const rows = Array.isArray(raw.rows) ? raw.rows : [];
+  const symbols = [];
+  for (const row of rows) {
+    const sym = String(row.symbol ?? row.sym ?? '').trim().toUpperCase();
+    if (sym && !symbols.includes(sym)) symbols.push(sym);
+  }
+  const age = raw.generated_at ? describeAge(Date.parse(raw.generated_at)) : null;
+  return {
+    title: raw.title ?? null,
+    generated_at: raw.generated_at ?? null,
+    symbols,
+    rows,
+    // Staleness is the whole risk with a file-backed scan, so it is stated
+    // rather than left for the reader to work out from a timestamp.
+    note: `${symbols.length} symbols${raw.title ? ` from "${raw.title}"` : ''}${age ? `, ${age}` : ''}`,
+  };
+}
+
+function describeAge(ms) {
+  if (!Number.isFinite(ms)) return null;
+  const mins = Math.round((Date.now() - ms) / 60000);
+  if (mins < 1) return 'just generated';
+  if (mins < 60) return `${mins} min old`;
+  const hours = Math.round(mins / 60);
+  if (hours < 48) return `${hours}h old`;
+  return `${Math.round(hours / 24)}d old`;
+}
+
+/* ------------------------------------------------------------------ *
  * HTTP
  * ------------------------------------------------------------------ */
 
@@ -228,8 +297,20 @@ const server = http.createServer(async (req, res) => {
       interval_sec: INTERVAL_SEC,
       snapshot_file: PROVIDER === 'snapshot' ? path.basename(SNAPSHOT_FILE) : undefined,
       token_present: PROVIDER === 'robinhood' ? Boolean(process.env.RH_TOKEN) : undefined,
+      scan_file: path.basename(SCAN_FILE),
+      scan_present: fs.existsSync(SCAN_FILE),
       last_error: lastError,
     });
+  }
+
+  if (url.pathname === '/scan') {
+    try {
+      return json(res, 200, readScan());
+    } catch (err) {
+      const message = `could not read ${path.basename(SCAN_FILE)}: ${err.message ?? err}`;
+      console.error('[scan]', message);
+      return json(res, 502, { error: message, symbols: [], rows: [] });
+    }
   }
 
   if (url.pathname === '/bars') {
@@ -314,7 +395,8 @@ server.on('error', (err) => {
 // 127.0.0.1 only: not reachable from another machine on the network.
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`bridge listening on http://127.0.0.1:${PORT}  (provider: ${PROVIDER})`);
-  console.log(`  GET /bars?symbols=NVDA,AMD   GET /health`);
+  console.log(`  GET /bars?symbols=NVDA,AMD   GET /scan   GET /health`);
+  console.log(`  scan file: ${path.basename(SCAN_FILE)}${fs.existsSync(SCAN_FILE) ? '' : ' (not present yet)'}`);
 });
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
