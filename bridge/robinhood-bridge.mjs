@@ -61,6 +61,14 @@ const BATCH_DELAY_MS = Number(args['batch-delay'] ?? 150);
 const BOUNDS = String(args.bounds ?? 'regular');
 const SPAN = String(args.span ?? 'hour');
 
+/**
+ * Every route this process serves. Reported on /health and printed at startup,
+ * from this one list — a caller uses it to tell "this bridge is older than the
+ * page" apart from "this endpoint is broken", so a second hardcoded copy that
+ * silently falls behind defeats the point of having it.
+ */
+const ENDPOINTS = ['/bars', '/scan', '/changes', '/health'];
+
 /* ------------------------------------------------------------------ *
  * Provider: snapshot
  * ------------------------------------------------------------------ */
@@ -418,7 +426,7 @@ const server = http.createServer(async (req, res) => {
       // Long-lived bridges outlive the code that started them. Listing what
       // this process actually serves lets a caller tell "endpoint missing"
       // apart from "endpoint broken" without guessing from a 404.
-      endpoints: ['/bars', '/scan', '/health'],
+      endpoints: ENDPOINTS,
       started_at: STARTED_AT,
       last_error: lastError,
     });
@@ -588,7 +596,7 @@ server.on('error', (err) => {
 // 127.0.0.1 only: not reachable from another machine on the network.
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`bridge listening on http://127.0.0.1:${PORT}  (provider: ${PROVIDER})`);
-  console.log(`  GET /bars?symbols=NVDA,AMD   GET /scan   GET /changes   GET /health`);
+  console.log(`  serving: ${ENDPOINTS.join('   ')}`);
   console.log(`  scan file: ${path.basename(SCAN_FILE)}${fs.existsSync(SCAN_FILE) ? '' : ' (not present yet)'}`);
 });
 
