@@ -9,6 +9,7 @@
  *
  *   GET /bars?symbols=NVDA,AMD,SNDK   ->  {interval_sec, bars: [...], note?}
  *   GET /scan                         ->  {title, symbols: [...], rows: [...], note?}
+ *   GET /changes?symbols=…&horizon=1d ->  {changes: {SYM: fraction}, note?}
  *   GET /health                       ->  {ok, provider, symbols, ...}
  *
  * Deliberate constraints:
@@ -250,6 +251,68 @@ function onlyNew(bars) {
 }
 
 /* ------------------------------------------------------------------ *
+ * Daily closes, for horizons longer than a session
+ * ------------------------------------------------------------------ */
+
+const RH_HISTORICALS_DAY = 'https://api.robinhood.com/marketdata/historicals/';
+/** Daily closes change once a day; refetching per poll would be pure waste. */
+const DAILY_TTL_MS = 10 * 60 * 1000;
+const dailyCache = new Map(); // sym -> { closes: number[], at: number }
+
+/**
+ * Closing prices for the last few months, one per session.
+ *
+ * The board's own price history only reaches back as far as the page has been
+ * open, so "change over 1 day / 1 week / 1 month" cannot come from the tape. It
+ * comes from here instead: one request per ten symbols, cached for ten minutes,
+ * with the caller doing the arithmetic over whichever window it wants.
+ */
+async function dailyCloses(symbols, token) {
+  const now = Date.now();
+  const stale = symbols.filter((s) => {
+    const hit = dailyCache.get(s);
+    return !hit || now - hit.at > DAILY_TTL_MS;
+  });
+
+  for (let i = 0; i < stale.length; i += 10) {
+    const batch = stale.slice(i, i + 10);
+    const url =
+      `${RH_HISTORICALS_DAY}?symbols=${encodeURIComponent(batch.join(','))}` +
+      `&interval=day&span=3month&bounds=regular`;
+    const res = await fetch(url, {
+      headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
+    });
+    if (res.status === 401 || res.status === 403) {
+      throw new Error('Robinhood rejected the token (401/403) — it likely expired; refresh RH_TOKEN');
+    }
+    if (!res.ok) throw new Error(`Robinhood responded ${res.status} for daily closes`);
+    const body = await res.json();
+    for (const result of body.results ?? []) {
+      const closes = (result.historicals ?? [])
+        .filter((b) => !b.interpolated)
+        .map((b) => Number(b.close_price))
+        .filter((n) => Number.isFinite(n) && n > 0);
+      dailyCache.set(result.symbol, { closes, at: now });
+    }
+    // Anything the vendor simply did not return gets a negative cache entry, so
+    // a delisted or mistyped symbol is not retried on every single poll.
+    for (const sym of batch) {
+      if (!dailyCache.has(sym) || dailyCache.get(sym).at !== now) {
+        dailyCache.set(sym, { closes: dailyCache.get(sym)?.closes ?? [], at: now });
+      }
+    }
+    if (i + 10 < stale.length) await sleep(BATCH_DELAY_MS);
+  }
+
+  const out = {};
+  for (const sym of symbols) out[sym] = dailyCache.get(sym)?.closes ?? [];
+  return out;
+}
+
+/** Sessions back to look for each horizon the tape cannot cover. */
+const HORIZON_SESSIONS = { '1d': 1, '1w': 5, '1mo': 21 };
+
+/* ------------------------------------------------------------------ *
  * Scanner results
  * ------------------------------------------------------------------ */
 
@@ -359,6 +422,58 @@ const server = http.createServer(async (req, res) => {
       started_at: STARTED_AT,
       last_error: lastError,
     });
+  }
+
+  if (url.pathname === '/changes') {
+    const symbols = (url.searchParams.get('symbols') ?? '')
+      .split(',')
+      .map((s) => s.trim().toUpperCase())
+      .filter(Boolean)
+      .slice(0, MAX_SYMBOLS);
+    const horizon = url.searchParams.get('horizon') ?? '1d';
+    const sessions = HORIZON_SESSIONS[horizon];
+    if (!sessions) {
+      return json(res, 400, {
+        error: `unknown horizon "${horizon}" — expected one of ${Object.keys(HORIZON_SESSIONS).join(', ')}`,
+        changes: {},
+      });
+    }
+    if (PROVIDER !== 'robinhood') {
+      return json(res, 200, {
+        changes: {},
+        note: `daily closes need --provider robinhood; this bridge is running the ${PROVIDER} provider`,
+      });
+    }
+    try {
+      const token = process.env.RH_TOKEN;
+      if (!token) throw new Error('RH_TOKEN is not set — see bridge/README.md');
+      const series = await dailyCloses(symbols, token);
+      const changes = {};
+      let short = 0;
+      for (const [sym, closes] of Object.entries(series)) {
+        // Need the latest close plus one from `sessions` ago. A freshly listed
+        // ticker legitimately has neither, and is left out rather than being
+        // given a change computed against whatever its oldest bar happens to be.
+        if (closes.length < sessions + 1) {
+          short++;
+          continue;
+        }
+        const latest = closes[closes.length - 1];
+        const before = closes[closes.length - 1 - sessions];
+        if (before > 0) changes[sym] = latest / before - 1;
+      }
+      const covered = Object.keys(changes).length;
+      return json(res, 200, {
+        changes,
+        note:
+          `${covered}/${symbols.length} symbols over ${sessions} session${sessions === 1 ? '' : 's'}` +
+          (short ? ` · ${short} without enough history` : ''),
+      });
+    } catch (err) {
+      lastError = String(err.message ?? err);
+      console.error('[changes]', lastError);
+      return json(res, 502, { error: lastError, changes: {} });
+    }
   }
 
   if (url.pathname === '/scan') {
@@ -473,7 +588,7 @@ server.on('error', (err) => {
 // 127.0.0.1 only: not reachable from another machine on the network.
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`bridge listening on http://127.0.0.1:${PORT}  (provider: ${PROVIDER})`);
-  console.log(`  GET /bars?symbols=NVDA,AMD   GET /scan   GET /health`);
+  console.log(`  GET /bars?symbols=NVDA,AMD   GET /scan   GET /changes   GET /health`);
   console.log(`  scan file: ${path.basename(SCAN_FILE)}${fs.existsSync(SCAN_FILE) ? '' : ' (not present yet)'}`);
 });
 

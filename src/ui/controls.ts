@@ -8,7 +8,15 @@ import {
   FEEDS_WITHOUT_QUOTES,
   type FeedId,
 } from '../feeds/index.ts';
-import { DEFAULT_CONFIG, SIGNAL_KEYS, SIGNAL_LABEL, type EngineConfig, type SignalKey } from '../types.ts';
+import {
+  DEFAULT_CONFIG,
+  HORIZONS,
+  SIGNAL_KEYS,
+  SIGNAL_LABEL,
+  type EngineConfig,
+  type SignalKey,
+  type SortBy,
+} from '../types.ts';
 
 export interface AppSettings {
   feed: FeedId;
@@ -120,7 +128,31 @@ export function mountControls(
     </label>`,
   ).join('');
 
+  const horizonOpts = HORIZONS.map(
+    (h) =>
+      `<option value="${h.id}" ${h.id === settings.config.sortHorizon ? 'selected' : ''}>${h.label}</option>`,
+  ).join('');
+
+  const SORT_LABEL: Record<SortBy, string> = {
+    score: 'Attention score',
+    change: 'Change — biggest gainers first',
+    absChange: 'Change — biggest movers, either direction',
+  };
+  const sortOpts = (Object.keys(SORT_LABEL) as SortBy[])
+    .map(
+      (k) => `<option value="${k}" ${k === settings.config.sortBy ? 'selected' : ''}>${SORT_LABEL[k]}</option>`,
+    )
+    .join('');
+
   root.innerHTML = `
+    <details class="panel" open>
+      <summary>Sort</summary>
+      <div class="grid">
+        <label class="field wide" title="What the published ordering is sorted by."><span>Order by</span><select data-sortby>${sortOpts}</select></label>
+        <label class="field wide" title="Lookback for the Δ column, and for the change sorts. Up to 3 hours comes from the tape this session has seen; a day or more comes from daily closes via the bridge."><span>Change over</span><select data-horizon>${horizonOpts}</select></label>
+      </div>
+      <p class="hint" data-sorthint></p>
+    </details>
     <details class="panel" open>
       <summary>Feed</summary>
       <div class="grid">
@@ -166,6 +198,38 @@ export function mountControls(
     saveSettings(settings);
     onChange(settings, restart);
   };
+
+  const sortHintEl = root.querySelector<HTMLElement>('[data-sorthint]')!;
+  const renderSortHint = () => {
+    const h = HORIZONS.find((x) => x.id === settings.config.sortHorizon);
+    const offTape = (h?.seconds ?? 0) > 4 * 3600;
+    const parts: string[] = [];
+    if (offTape) {
+      parts.push(
+        'This lookback is longer than the live tape reaches, so it comes from daily closes through the bridge — Robinhood provider only, refreshed every few minutes.',
+      );
+    } else {
+      parts.push('Measured from the tape this session has seen; rows show — until the board has been open that long.');
+    }
+    if (settings.config.sortBy !== 'score') {
+      parts.push(
+        'Sorting by change bypasses the enter/exit thresholds, which are calibrated for the 0-1 score and mean nothing as a percentage. Expect a livelier list. Robust and Fcst still describe the attention score, not this ordering.',
+      );
+    }
+    sortHintEl.textContent = parts.join(' ');
+  };
+  renderSortHint();
+
+  root.querySelector<HTMLSelectElement>('[data-sortby]')!.addEventListener('change', (e) => {
+    settings.config.sortBy = (e.target as HTMLSelectElement).value as SortBy;
+    renderSortHint();
+    emit(false);
+  });
+  root.querySelector<HTMLSelectElement>('[data-horizon]')!.addEventListener('change', (e) => {
+    settings.config.sortHorizon = (e.target as HTMLSelectElement).value;
+    renderSortHint();
+    emit(false);
+  });
 
   const hintEl = root.querySelector<HTMLElement>('[data-feedhint]')!;
 

@@ -30,6 +30,9 @@ self.onmessage = (ev: MessageEvent<ToWorker>) => {
     case 'bars':
       engine.ingest(msg.bars);
       break;
+    case 'longChanges':
+      engine.setLongChanges(msg.horizon, msg.changes);
+      break;
     case 'reset':
       engine.reset();
       break;

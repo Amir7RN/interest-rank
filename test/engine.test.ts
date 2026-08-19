@@ -221,3 +221,93 @@ test('engine liquidity floor excludes cheap illiquid names', () => {
   assert.ok(!syms.includes('THIN'), 'sub-ADV name should be filtered');
   assert.ok(syms.includes('REAL'));
 });
+
+test('sorting by change orders the board by the chosen lookback, not the score', () => {
+  const engine = new Engine();
+  engine.configure({
+    ...DEFAULT_CONFIG,
+    minPrice: 1,
+    minAdv: 0,
+    topN: 5,
+    windowSec: 30,
+    sortBy: 'change',
+    sortHorizon: '10s',
+  });
+  const syms = ['AAA', 'BBB', 'CCC'];
+  let t = Date.parse('2026-08-17T15:00:00Z');
+
+  // Warm up flat, so nothing has a change yet.
+  for (let i = 0; i < 60; i++) {
+    engine.ingest(syms.map((s, k) => bar(s, t, 20 + k, 1000)));
+    engine.step(t);
+    t += 1000;
+  }
+  // BBB rises hard over the next 15 s, AAA falls, CCC stays put.
+  let snap = engine.step(t);
+  for (let i = 1; i <= 15; i++) {
+    engine.ingest([
+      bar('AAA', t, 20 - i * 0.1, 1000),
+      bar('BBB', t, 21 + i * 0.3, 1000),
+      bar('CCC', t, 22, 1000),
+    ]);
+    snap = engine.step(t);
+    t += 1000;
+  }
+
+  assert.equal(snap.rows[0].sym, 'BBB', 'the biggest riser must lead a change sort');
+  assert.equal(snap.rows[snap.rows.length - 1].sym, 'AAA', 'the faller must sit last');
+  assert.ok(snap.rows[0].chgSel !== null && snap.rows[0].chgSel > 0, `chgSel=${snap.rows[0].chgSel}`);
+  // The score ordering is genuinely different, which is the point of the option.
+  assert.ok(snap.rows.some((r, i) => i > 0 && r.score > snap.rows[0].score), 'expected score order to differ');
+});
+
+test('a lookback the tape cannot reach yet publishes nothing rather than zeros', () => {
+  const engine = new Engine();
+  engine.configure({
+    ...DEFAULT_CONFIG,
+    minPrice: 1,
+    minAdv: 0,
+    topN: 5,
+    windowSec: 30,
+    sortBy: 'change',
+    sortHorizon: '1h',
+  });
+  const syms = ['AAA', 'BBB'];
+  let t = Date.parse('2026-08-17T15:00:00Z');
+  let snap = engine.step(t);
+  for (let i = 0; i < 90; i++) {
+    engine.ingest(syms.map((s, k) => bar(s, t, 20 + k + i * 0.01, 1000)));
+    snap = engine.step(t);
+    t += 1000;
+  }
+  assert.equal(snap.rows.length, 0, 'ninety seconds of tape cannot answer an hourly change');
+});
+
+test('long-horizon changes supplied from outside the tape drive the sort', () => {
+  const engine = new Engine();
+  engine.configure({
+    ...DEFAULT_CONFIG,
+    minPrice: 1,
+    minAdv: 0,
+    topN: 5,
+    windowSec: 30,
+    sortBy: 'change',
+    sortHorizon: '1d',
+  });
+  const syms = ['AAA', 'BBB', 'CCC'];
+  let t = Date.parse('2026-08-17T15:00:00Z');
+  engine.setLongChanges('1d', { AAA: 0.01, BBB: 0.09, CCC: 0.05 });
+
+  let snap = engine.step(t);
+  for (let i = 0; i < 40; i++) {
+    engine.ingest(syms.map((s, k) => bar(s, t, 20 + k, 1000)));
+    snap = engine.step(t);
+    t += 1000;
+  }
+  assert.deepEqual(
+    snap.rows.map((r) => r.sym),
+    ['BBB', 'CCC', 'AAA'],
+    'daily closes must order the board when the horizon exceeds the tape',
+  );
+  assert.ok(Math.abs((snap.rows[0].chgSel ?? 0) - 0.09) < 1e-9);
+});

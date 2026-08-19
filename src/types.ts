@@ -31,6 +31,43 @@ export const SIGNAL_LABEL: Record<SignalKey, string> = {
 
 export type Weights = Record<SignalKey, number>;
 
+/** A lookback the board can rank by. */
+export interface Horizon {
+  id: string;
+  label: string;
+  seconds: number;
+}
+
+/**
+ * Sort horizons, shortest first.
+ *
+ * Everything up to 3h is answered from the live tape this session has actually
+ * seen. A day or more cannot be — the page has not been open that long — so
+ * those are filled from daily closes fetched through the bridge, and read as
+ * null until they arrive. See `PriceHistory` and the bridge's `/dailies`.
+ */
+export const HORIZONS: Horizon[] = [
+  { id: '3s', label: '3 seconds', seconds: 3 },
+  { id: '10s', label: '10 seconds', seconds: 10 },
+  { id: '30s', label: '30 seconds', seconds: 30 },
+  { id: '1m', label: '1 minute', seconds: 60 },
+  { id: '5m', label: '5 minutes', seconds: 300 },
+  { id: '10m', label: '10 minutes', seconds: 600 },
+  { id: '30m', label: '30 minutes', seconds: 1800 },
+  { id: '1h', label: '1 hour', seconds: 3600 },
+  { id: '3h', label: '3 hours', seconds: 10800 },
+  { id: '1d', label: '1 day', seconds: 86_400 },
+  { id: '1w', label: '1 week', seconds: 604_800 },
+  { id: '1mo', label: '1 month', seconds: 2_592_000 },
+];
+
+export function horizonById(id: string): Horizon {
+  return HORIZONS.find((h) => h.id === id) ?? HORIZONS[3];
+}
+
+/** How the published list is ordered. */
+export type SortBy = 'score' | 'change' | 'absChange';
+
 export interface EngineConfig {
   /** EWMA time constants, seconds */
   tauFast: number; // surge window
@@ -50,6 +87,10 @@ export interface EngineConfig {
   minAdv: number;
   /** predictive horizon in seconds for the ensemble forecast */
   horizonSec: number;
+  /** what the published ordering is sorted by */
+  sortBy: SortBy;
+  /** id from HORIZONS — the lookback the change columns and change sorts use */
+  sortHorizon: string;
 }
 
 export const DEFAULT_CONFIG: EngineConfig = {
@@ -65,6 +106,8 @@ export const DEFAULT_CONFIG: EngineConfig = {
   minPrice: 5,
   minAdv: 500_000,
   horizonSec: 30,
+  sortBy: 'score',
+  sortHorizon: '1m',
 };
 
 export type Prediction = 'UP' | 'HOLD' | 'DOWN';
@@ -78,6 +121,12 @@ export interface RankRow {
   price: number;
   /** session return, fraction */
   chg: number;
+  /**
+   * Change over the selected sort horizon, or null when it cannot be known
+   * yet — the tape has not run that long, or the daily closes have not
+   * arrived. Null is displayed, never silently rendered as 0%.
+   */
+  chgSel: number | null;
   /** smoothed composite score, 0..1 */
   score: number;
   /** raw (unsmoothed) composite */
@@ -128,6 +177,8 @@ export interface Snapshot {
 export type ToWorker =
   | { type: 'config'; config: EngineConfig }
   | { type: 'bars'; bars: Bar[] }
+  /** long-horizon changes by symbol, keyed by horizon id — sourced off-tape */
+  | { type: 'longChanges'; horizon: string; changes: Record<string, number> }
   | { type: 'reset' };
 
 export type FromWorker =

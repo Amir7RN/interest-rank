@@ -1,9 +1,11 @@
 import { percentileRank, topK } from './crosssection.ts';
+import { TAPE_MAX_SEC } from './pricehistory.ts';
 import { bucketOf, ProfileStore } from './profile.ts';
 import { TickerState } from './ticker.ts';
 import { predLabel, tally, type Member } from './vote.ts';
 import {
   DEFAULT_CONFIG,
+  horizonById,
   SIGNAL_KEYS,
   type Bar,
   type EngineConfig,
@@ -30,6 +32,8 @@ export class Engine {
   private index = new Map<string, number>();
   private pending = new Map<number, Bar>();
   private published = new Map<string, number>();
+  /** off-tape changes for horizons longer than the tape can reach, by horizon id */
+  private longChanges = new Map<string, Map<string, number>>();
   private stepNo = 0;
   private barsSeen = 0;
   private lastRateT = 0;
@@ -50,6 +54,10 @@ export class Engine {
   private slopeSlowArr = new Float64Array(0);
   private slopeMeanArr = new Float64Array(0);
   private slopeMedArr = new Float64Array(0);
+  /** change over the selected horizon; NaN where it is not yet knowable */
+  private chgArr = new Float64Array(0);
+  /** whatever the list is currently ordered by — score, or a change */
+  private sortArr = new Float64Array(0);
   private active = new Int32Array(0);
   private order = new Int32Array(0);
 
@@ -70,6 +78,13 @@ export class Engine {
     this.pending.clear();
     this.published.clear();
     this.stepNo = 0;
+    // Long-horizon changes describe the market, not this run, so they survive a
+    // feed restart — refetching them costs a round trip per ten symbols.
+  }
+
+  /** Supply changes for a horizon the live tape cannot reach back to. */
+  setLongChanges(horizon: string, changes: Record<string, number>): void {
+    this.longChanges.set(horizon, new Map(Object.entries(changes)));
   }
 
   /** Merge incoming bars into the pending bucket for the next step. */
@@ -120,6 +135,8 @@ export class Engine {
     this.slopeSlowArr = grow(this.slopeSlowArr, cap);
     this.slopeMeanArr = grow(this.slopeMeanArr, cap);
     this.slopeMedArr = grow(this.slopeMedArr, cap);
+    this.chgArr = grow(this.chgArr, cap);
+    this.sortArr = grow(this.sortArr, cap);
     this.active = new Int32Array(cap);
     this.order = new Int32Array(cap);
   }
@@ -194,6 +211,11 @@ export class Engine {
         this.z[k][i] = s.fast[k].mean;
       }
 
+      // One price sample per step per ticker, whether or not a bar arrived: the
+      // change-over-horizon lookbacks index by step count, so a ticker that
+      // goes quiet must still advance or its "3 seconds ago" would drift.
+      s.prices.push(s.price);
+
       // baselines are stored shape-free so they stay comparable across the day
       s.advPerSec.push(v / Math.max(shape, 1e-3), t);
       s.tradesPerSec.push(nTrades / Math.max(shape, 1e-3), t);
@@ -240,9 +262,37 @@ export class Engine {
       this.slowArr[i] = s.scoreSlow.mean;
     }
 
+    /* ---- stage 2b: change over the selected horizon, and the sort key ---- */
+    const horizon = horizonById(cfg.sortHorizon);
+    const offTape = horizon.seconds > TAPE_MAX_SEC;
+    const supplied = offTape ? this.longChanges.get(horizon.id) : undefined;
+
+    for (let a = 0; a < nActive; a++) {
+      const i = act[a];
+      const s = this.states[i];
+      // A horizon past what the tape holds is answered from daily closes, if
+      // they have been supplied; NaN marks "not knowable yet" all the way to
+      // the row, so nothing downstream mistakes it for a flat 0%.
+      const change = offTape ? supplied?.get(s.sym) ?? null : s.prices.changeOver(horizon.seconds);
+      this.chgArr[i] = change === null ? NaN : change;
+    }
+
+    // Sorting by a change nobody can compute yet would order the board by
+    // whichever tickers happen to have NaN. Tickers without a value sort last.
+    const byChange = cfg.sortBy !== 'score';
+    for (let a = 0; a < nActive; a++) {
+      const i = act[a];
+      if (!byChange) {
+        this.sortArr[i] = this.scoreArr[i];
+        continue;
+      }
+      const c = this.chgArr[i];
+      this.sortArr[i] = Number.isNaN(c) ? -Infinity : cfg.sortBy === 'absChange' ? Math.abs(c) : c;
+    }
+
     /* ---- stage 3: window stats on the shortlist ---- */
     const k = Math.max(SHORTLIST_MIN, cfg.topN * SHORTLIST_MULT);
-    const shortlist = topK(this.scoreArr, this.active, nActive, k);
+    const shortlist = topK(this.sortArr, this.active, nActive, k);
 
     for (let a = 0; a < shortlist.length; a++) {
       const i = shortlist[a];
@@ -278,38 +328,53 @@ export class Engine {
     const vote = tally(shortlist, this.states.length, members, cfg.topN, cfg.horizonSec);
 
     /* ---- stage 5: hysteresis on list membership ---- */
-    const ranked = Array.from(shortlist).sort((a, b) => this.scoreArr[b] - this.scoreArr[a]);
+    const ranked = Array.from(shortlist).sort((a, b) => this.sortArr[b] - this.sortArr[a]);
     const chosen: number[] = [];
     const heldFlag = new Set<number>();
-    for (let r = 0; r < ranked.length && chosen.length < cfg.topN; r++) {
-      const i = ranked[r];
-      const sym = this.states[i].sym;
-      const sc = this.scoreArr[i];
-      const incumbent = this.published.has(sym);
-      if (incumbent) {
-        // Schmitt trigger: an incumbent keeps its seat down to thetaOut, so the
-        // list does not chatter for tickers sitting right on the threshold.
-        if (sc >= cfg.thetaOut && r < cfg.rankExit) {
-          chosen.push(i);
-          if (sc < cfg.thetaIn) heldFlag.add(i);
-        }
-      } else if (sc >= cfg.thetaIn) {
-        chosen.push(i);
+
+    // The Schmitt trigger is calibrated on a 0-1 composite; thetaIn = 0.72 means
+    // nothing applied to a percentage change, where 0.72 would be a 72% move. So
+    // a change sort takes the top N outright. It flickers more, and that is the
+    // honest behaviour: the ordering really is that volatile at short horizons.
+    if (byChange) {
+      for (let r = 0; r < ranked.length && chosen.length < cfg.topN; r++) {
+        // Stop at the first ticker with no value for this horizon: `ranked` is
+        // descending, so everything after it is also unknown. Padding the list
+        // with them would fill the board with blanks.
+        if (this.sortArr[ranked[r]] === -Infinity) break;
+        chosen.push(ranked[r]);
       }
-    }
-    // If thresholds starve the list, fill the remaining slots by score so the
-    // board is never mysteriously short.
-    if (chosen.length < cfg.topN) {
-      const taken = new Set(chosen);
+    } else {
       for (let r = 0; r < ranked.length && chosen.length < cfg.topN; r++) {
         const i = ranked[r];
-        if (!taken.has(i)) {
+        const sym = this.states[i].sym;
+        const sc = this.scoreArr[i];
+        const incumbent = this.published.has(sym);
+        if (incumbent) {
+          // Schmitt trigger: an incumbent keeps its seat down to thetaOut, so the
+          // list does not chatter for tickers sitting right on the threshold.
+          if (sc >= cfg.thetaOut && r < cfg.rankExit) {
+            chosen.push(i);
+            if (sc < cfg.thetaIn) heldFlag.add(i);
+          }
+        } else if (sc >= cfg.thetaIn) {
           chosen.push(i);
-          heldFlag.add(i);
+        }
+      }
+      // If thresholds starve the list, fill the remaining slots by score so the
+      // board is never mysteriously short.
+      if (chosen.length < cfg.topN) {
+        const taken = new Set(chosen);
+        for (let r = 0; r < ranked.length && chosen.length < cfg.topN; r++) {
+          const i = ranked[r];
+          if (!taken.has(i)) {
+            chosen.push(i);
+            heldFlag.add(i);
+          }
         }
       }
     }
-    chosen.sort((a, b) => this.scoreArr[b] - this.scoreArr[a]);
+    chosen.sort((a, b) => this.sortArr[b] - this.sortArr[a]);
 
     /* ---- stage 6: emit ---- */
     const rows: RankRow[] = [];
@@ -334,6 +399,7 @@ export class Engine {
         prevRank: prev ?? null,
         price: s.price,
         chg: s.chg,
+        chgSel: Number.isNaN(this.chgArr[i]) ? null : this.chgArr[i],
         score: this.scoreArr[i],
         raw: this.raw[i],
         mean: this.meanArr[i],

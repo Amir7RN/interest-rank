@@ -1,4 +1,5 @@
 import { Ewma } from './ewma.ts';
+import { PriceHistory } from './pricehistory.ts';
 import { RollingWindow } from './window.ts';
 import { SIGNAL_KEYS, type SignalKey } from '../types.ts';
 
@@ -31,6 +32,9 @@ export class TickerState {
   rvolNow = 0;
   scoreSmooth: Ewma;
   scoreSlow: Ewma;
+
+  /** price at 1s/1min resolution, for the change-over-horizon sorts */
+  readonly prices = new PriceHistory();
 
   /** allocated lazily, only for shortlisted tickers */
   win: RollingWindow | null = null;

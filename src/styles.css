@@ -221,3 +221,7 @@ table.board { width: 100%; border-collapse: collapse; font-variant-numeric: tabu
 @media (prefers-reduced-motion: reduce) {
   .flash-up, .flash-down, .dot.connecting { animation: none; }
 }
+
+/* A change the board cannot know yet — rendered as an em dash, kept quiet so it
+   reads as "no answer" rather than as a value. */
+td.chgsel.muted { color: var(--muted); }

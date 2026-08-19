@@ -8,6 +8,7 @@ interface RowEls {
   sym: HTMLElement;
   price: HTMLElement;
   chg: HTMLElement;
+  chgSel: HTMLElement;
   score: HTMLElement;
   bar: HTMLElement;
   spark: SVGPathElement;
@@ -51,6 +52,7 @@ export class RankTable {
             <th>Symbol</th>
             <th class="num">Last</th>
             <th class="num">Chg</th>
+            <th class="num" data-selhead title="Change over the selected horizon">Δ</th>
             <th class="num" title="Smoothed cross-sectional composite, 0-1">Score</th>
             <th title="Smoothed score over the window">Trend</th>
             <th class="num" title="Mean score over the window">Mean</th>
@@ -173,6 +175,7 @@ export class RankTable {
       <td class="sym"></td>
       <td class="num price"></td>
       <td class="num chg"></td>
+      <td class="num chgsel"></td>
       <td class="num score-cell"><span class="score"></span><span class="scorebar"><i></i></span></td>
       <td class="sparkcell"><svg width="${SPARK_W}" height="${SPARK_H}" viewBox="0 0 ${SPARK_W} ${SPARK_H}"><path fill="none" stroke="currentColor" stroke-width="1.4"/></svg></td>
       <td class="num mean"></td>
@@ -191,6 +194,7 @@ export class RankTable {
       sym: q('.sym'),
       price: q('.price'),
       chg: q('.chg'),
+      chgSel: q('.chgsel'),
       score: q('.score'),
       bar: q('.scorebar i'),
       spark: q<SVGPathElement>('path'),
@@ -227,6 +231,18 @@ export class RankTable {
     }
     set(e.chg, `${r.chg >= 0 ? '+' : ''}${(r.chg * 100).toFixed(2)}%`);
     e.chg.className = `num chg ${r.chg >= 0 ? 'up' : 'down'}`;
+
+    // An em dash, not 0.00%: the horizon reaches further back than this session
+    // has data for, and a zero would read as "it did not move".
+    if (r.chgSel === null) {
+      set(e.chgSel, '—');
+      e.chgSel.className = 'num chgsel muted';
+      e.chgSel.title = 'not enough history for this lookback yet';
+    } else {
+      set(e.chgSel, `${r.chgSel >= 0 ? '+' : ''}${(r.chgSel * 100).toFixed(2)}%`);
+      e.chgSel.className = `num chgsel ${r.chgSel >= 0 ? 'up' : 'down'}`;
+      e.chgSel.title = '';
+    }
 
     set(e.score, r.score.toFixed(3));
     e.bar.style.width = `${Math.round(Math.min(1, Math.max(0, r.score)) * 100)}%`;

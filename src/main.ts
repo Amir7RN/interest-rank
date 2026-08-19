@@ -2,7 +2,7 @@ import { createFeed, type Feed, type FeedStatus } from './feeds/index.ts';
 import { CORE_SYMBOLS } from './feeds/universe.ts';
 import { mountControls, loadSettings, type AppSettings } from './ui/controls.ts';
 import { RankTable } from './ui/table.ts';
-import type { FromWorker, Snapshot, ToWorker } from './types.ts';
+import { horizonById, type FromWorker, type Snapshot, type ToWorker } from './types.ts';
 import './styles.css';
 
 const settings = loadSettings();
@@ -17,6 +17,15 @@ let feedState: FeedStatus = { state: 'idle' };
 let lastSnap: Snapshot | null = null;
 /** the bridge's description of the active `*scan`, shown in the status bar */
 let scanNote: string | null = null;
+/** the bridge's description of the last long-horizon change fetch */
+let changesNote: string | null = null;
+/** symbols the active feed was started with, for the long-horizon fetch */
+let activeSymbols: string[] = [];
+
+/** Longest lookback the live tape can answer; must match PriceHistory. */
+const TAPE_MAX_SEC = 4 * 3600;
+/** Daily closes move once a day; this only needs to catch the roll. */
+const LONG_CHANGE_POLL_MS = 5 * 60 * 1000;
 
 function send(msg: ToWorker): void {
   worker.postMessage(msg);
@@ -154,6 +163,8 @@ async function startFeed(s: AppSettings): Promise<void> {
 
   scanNote = list.note;
   if (list.problem) table.setFeedProblem(list.problem);
+  activeSymbols = list.symbols.length ? list.symbols : CORE_SYMBOLS.slice(0, 25);
+  void refreshLongChanges(s);
 
   feed = createFeed(s.feed, {
     apiKey: s.apiKey,
@@ -180,12 +191,53 @@ async function startFeed(s: AppSettings): Promise<void> {
   );
 }
 
+/**
+ * Fetch changes for a lookback longer than the tape can reach.
+ *
+ * Only the bridge can answer these — they need daily closes, and the page has
+ * only been open for minutes. Called on horizon change and on a slow timer;
+ * silently does nothing for horizons the tape already covers.
+ */
+async function refreshLongChanges(s: AppSettings): Promise<void> {
+  const horizon = horizonById(s.config.sortHorizon);
+  if (horizon.seconds <= TAPE_MAX_SEC || activeSymbols.length === 0) {
+    changesNote = null;
+    return;
+  }
+  const base = (s.bridgeUrl || 'http://127.0.0.1:8787').replace(/\/+$/, '');
+  const url =
+    `${base}/changes?symbols=${encodeURIComponent(activeSymbols.join(','))}` +
+    `&horizon=${encodeURIComponent(horizon.id)}`;
+  try {
+    const res = await fetch(url, { headers: { accept: 'application/json' } });
+    const body = (await res.json().catch(() => ({}))) as {
+      changes?: Record<string, number>;
+      note?: string;
+      error?: string;
+    };
+    if (res.status === 404) {
+      changesNote = `${horizon.label}: bridge predates /changes — restart it`;
+      return;
+    }
+    if (!res.ok) {
+      changesNote = `${horizon.label}: ${body.error ?? res.status}`;
+      return;
+    }
+    changesNote = body.note ? `${horizon.label} · ${body.note}` : null;
+    send({ type: 'longChanges', horizon: horizon.id, changes: body.changes ?? {} });
+  } catch {
+    changesNote = `${horizon.label}: bridge unreachable — long lookbacks need it`;
+  }
+  renderStatus();
+}
+
 function renderStatus(): void {
   const st = lastSnap?.stats;
   const dot = `<span class="dot ${feedState.state}"></span>`;
   statusEl.innerHTML = [
     `${dot}<b>${feedState.state}</b>${feedState.detail ? ` · ${feedState.detail}` : ''}`,
     scanNote ? `scan: ${scanNote}` : '',
+    changesNote ?? '',
     st ? `universe ${st.universe}` : '',
     st ? `ranked ${st.active}` : '',
     st ? `${st.barsPerSec}/s bars` : '',
@@ -203,7 +255,20 @@ setInterval(() => {
 
 mountControls(document.getElementById('controls')!, settings, (s, restart) => {
   send({ type: 'config', config: s.config });
+  setSelHeader(s.config.sortHorizon);
   if (restart) void startFeed(s);
+  // Changing the horizon can move it across the tape/daily-closes boundary, so
+  // re-resolve rather than waiting up to five minutes for the next poll.
+  else void refreshLongChanges(s);
 });
+
+/** Label the Δ column with the horizon it is actually showing. */
+function setSelHeader(horizonId: string): void {
+  const th = document.querySelector<HTMLElement>('[data-selhead]');
+  if (th) th.textContent = `Δ ${horizonById(horizonId).id}`;
+}
+setSelHeader(settings.config.sortHorizon);
+
+setInterval(() => void refreshLongChanges(settings), LONG_CHANGE_POLL_MS);
 
 renderStatus();
