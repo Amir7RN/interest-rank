@@ -1,11 +1,19 @@
-import { FEED_IDS, FEED_LABEL, FEEDS_WITHOUT_QUOTES, type FeedId } from '../feeds/index.ts';
+import {
+  asFeedId,
+  DEFAULT_FEED,
+  FEED_IDS,
+  FEED_LABEL,
+  FEEDS_NEEDING_KEY,
+  FEEDS_USING_BRIDGE,
+  FEEDS_WITHOUT_QUOTES,
+  type FeedId,
+} from '../feeds/index.ts';
 import { DEFAULT_CONFIG, SIGNAL_KEYS, SIGNAL_LABEL, type EngineConfig, type SignalKey } from '../types.ts';
 
 export interface AppSettings {
   feed: FeedId;
   apiKey: string;
   symbols: string;
-  universe: number;
   bridgeUrl: string;
   /** Massive replay: seconds of tape per wall-clock second */
   replaySpeed: number;
@@ -18,10 +26,9 @@ const KEY = 'interest-rank.settings.v1';
 
 export function loadSettings(): AppSettings {
   const base: AppSettings = {
-    feed: 'sim',
+    feed: DEFAULT_FEED,
     apiKey: '',
     symbols: 'AAPL,MSFT,NVDA,AMD,TSLA,SNDK,MU,INTC,SPY,QQQ',
-    universe: 800,
     bridgeUrl: 'http://127.0.0.1:8787',
     replaySpeed: 10,
     replayDate: '',
@@ -34,6 +41,10 @@ export function loadSettings(): AppSettings {
     return {
       ...base,
       ...saved,
+      // A browser that used a since-removed feed (the old simulator, Finnhub,
+      // Polygon) has that id in localStorage. Left alone it selects nothing and
+      // the board sits dead with no explanation, so it falls back instead.
+      feed: asFeedId(saved.feed),
       config: { ...base.config, ...(saved.config ?? {}), weights: { ...base.config.weights, ...(saved.config?.weights ?? {}) } },
     };
   } catch {
@@ -51,15 +62,12 @@ export function saveSettings(s: AppSettings): void {
 
 /** Per-feed caveats worth seeing before reading the board. */
 const FEED_HINT: Record<string, string> = {
-  sim: 'Synthetic tape generated in this tab. No network, no key, no real prices.',
   replay:
     "Real prints, yesterday. Massive's free Basic tier includes historical minute bars but not today's tape, so this downloads one completed session and plays it back — one request per symbol, so keep the watchlist short. Minute bars are sliced down to the step, so the aggregate is real and the path inside it is interpolated. No quotes, so quote churn is set to 0. At speed S a τ of N seconds covers N/S seconds of market time: divide the τ settings by the speed to keep them meaning what they mean live.",
   robinhood:
-    'Needs the local bridge running (bridge/README.md). Bars are 15-second, split into 1-second slices — the aggregate is real, the path inside it is interpolated. No quote data, so quote churn is set to 0. Max 10 symbols per Robinhood call.',
+    '`npm run dev` starts the bridge alongside the page, so this works out of the box locally; on a deployed page you run the bridge yourself. Bars are 15-second, split into 1-second slices — the aggregate is real, the path inside it is interpolated. No quote data, so quote churn is set to 0. Max 10 symbols per Robinhood call.',
   massive:
     "Full-SIP 1-second aggregates from massive.com. Needs a real-time plan — the free tier has no socket and the delayed tiers stream 15-minute-old bars, which is not a ranking of now. Trade count is derived from average trade size; no quote channel.",
-  polygon: 'Full-SIP 1-second aggregates. Trade count is derived from average trade size; no quote channel.',
-  finnhub: 'Trades aggregated locally into 1-second bars. Per-symbol subscribe only — the cross-section is your watchlist.',
 };
 
 interface NumField {
@@ -117,11 +125,10 @@ export function mountControls(
       <summary>Feed</summary>
       <div class="grid">
         <label class="field"><span>Source</span><select data-feed>${feedOpts}</select></label>
-        <label class="field"><span>API key</span><input type="password" data-key placeholder="stored in this browser only" value="${escapeAttr(settings.apiKey)}"></label>
-        <label class="field"><span>Sim universe</span><input type="number" data-universe min="50" max="8000" step="50" value="${settings.universe}"></label>
-        <label class="field wide" title="Local bars bridge for the Robinhood feed — see bridge/README.md"><span>Bridge URL</span><input type="text" data-bridge value="${escapeAttr(settings.bridgeUrl)}"></label>
-        <label class="field" title="Massive replay: seconds of tape consumed per wall-clock second. Raising it shortens every time constant in market time by the same factor."><span>Replay speed (x)</span><input type="number" data-speed min="1" max="60" step="1" value="${settings.replaySpeed}"></label>
-        <label class="field" title="Massive replay: session to play back. Leave empty to use the most recent session with data."><span>Replay date</span><input type="date" data-replaydate value="${escapeAttr(settings.replayDate)}"></label>
+        <label class="field" data-for="key"><span>API key</span><input type="password" data-key placeholder="stored in this browser only" value="${escapeAttr(settings.apiKey)}"></label>
+        <label class="field wide" data-for="bridge" title="Local bars bridge for the Robinhood feed — see bridge/README.md"><span>Bridge URL</span><input type="text" data-bridge value="${escapeAttr(settings.bridgeUrl)}"></label>
+        <label class="field" data-for="replay" title="Massive replay: seconds of tape consumed per wall-clock second. Raising it shortens every time constant in market time by the same factor."><span>Replay speed (x)</span><input type="number" data-speed min="1" max="60" step="1" value="${settings.replaySpeed}"></label>
+        <label class="field" data-for="replay" title="Massive replay: session to play back. Leave empty to use the most recent session with data."><span>Replay date</span><input type="date" data-replaydate value="${escapeAttr(settings.replayDate)}"></label>
         <label class="field wide" title="Comma-separated tickers. *core is the built-in liquid US list (*core:50 for the first 50). *scan takes the current Robinhood screener results from the bridge, in the scanner's own order (*scan:20 for its top 20)."><span>Watchlist — <code>*core</code> built-in list, <code>*scan</code> Robinhood screener</span><input type="text" data-symbols value="${escapeAttr(settings.symbols)}"></label>
       </div>
       <button data-restart class="btn">Reconnect feed</button>
@@ -161,10 +168,27 @@ export function mountControls(
   };
 
   const hintEl = root.querySelector<HTMLElement>('[data-feedhint]')!;
-  const renderHint = () => {
-    hintEl.textContent = FEED_HINT[settings.feed] ?? '';
+
+  /**
+   * Show only the settings the selected source actually reads. A key box on a
+   * feed that has no key, or a replay date on a live socket, is a control that
+   * silently does nothing — worse than absent, because it invites you to fill
+   * it in and then wonder why nothing changed.
+   */
+  const applies: Record<string, (feed: FeedId) => boolean> = {
+    key: (feed) => FEEDS_NEEDING_KEY.includes(feed),
+    bridge: (feed) => FEEDS_USING_BRIDGE.includes(feed),
+    replay: (feed) => feed === 'replay',
   };
-  renderHint();
+
+  const renderFeedFields = () => {
+    hintEl.textContent = FEED_HINT[settings.feed] ?? '';
+    for (const el of root.querySelectorAll<HTMLElement>('[data-for]')) {
+      const relevant = applies[el.dataset.for ?? '']?.(settings.feed) ?? true;
+      el.hidden = !relevant;
+    }
+  };
+  renderFeedFields();
 
   root.querySelector<HTMLSelectElement>('[data-feed]')!.addEventListener('change', (e) => {
     settings.feed = (e.target as HTMLSelectElement).value as FeedId;
@@ -177,15 +201,11 @@ export function mountControls(
       if (slider) slider.value = '0';
       if (out) out.value = '0.00';
     }
-    renderHint();
+    renderFeedFields();
     emit(true);
   });
   root.querySelector<HTMLInputElement>('[data-key]')!.addEventListener('change', (e) => {
     settings.apiKey = (e.target as HTMLInputElement).value.trim();
-    emit(true);
-  });
-  root.querySelector<HTMLInputElement>('[data-universe]')!.addEventListener('change', (e) => {
-    settings.universe = clampInt((e.target as HTMLInputElement).value, 50, 8000, 800);
     emit(true);
   });
   root.querySelector<HTMLInputElement>('[data-symbols]')!.addEventListener('change', (e) => {

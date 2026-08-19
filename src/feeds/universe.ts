@@ -36,20 +36,3 @@ const RAW = [
 ];
 
 export const CORE_SYMBOLS: string[] = Array.from(new Set(RAW));
-
-/** Deterministic pseudo-symbols to pad the simulated universe out to size. */
-export function synthUniverse(n: number): string[] {
-  const out = CORE_SYMBOLS.slice(0, n);
-  const A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-  let i = 0;
-  while (out.length < n) {
-    const a = A[i % 26];
-    const b = A[Math.floor(i / 26) % 26];
-    const c = A[Math.floor(i / 676) % 26];
-    const d = A[Math.floor(i / 17576) % 26];
-    const sym = `${a}${b}${c}${d}`;
-    if (!CORE_SYMBOLS.includes(sym)) out.push(sym);
-    i++;
-  }
-  return out;
-}

@@ -22,8 +22,6 @@ export interface FeedOptions {
   apiKey: string;
   /** symbol subset, used by feeds that cannot subscribe to the whole tape */
   symbols: string[];
-  /** simulated universe size */
-  universe: number;
   /** base URL of the local bars bridge (Robinhood feed) */
   bridgeUrl: string;
   /** Massive replay: seconds of tape consumed per wall-clock second */

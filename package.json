@@ -5,9 +5,11 @@
   "type": "module",
   "description": "Real-time cross-sectional stock attention ranking with ensemble robustness voting",
   "scripts": {
-    "dev": "vite",
+    "dev": "node scripts/dev.mjs",
+    "dev:web": "vite",
+    "bridge": "node bridge/robinhood-bridge.mjs",
     "build": "tsc --noEmit && vite build",
-    "preview": "vite preview",
+    "preview": "node scripts/dev.mjs --preview",
     "typecheck": "tsc --noEmit",
     "test": "node --test --experimental-strip-types test/*.test.ts"
   },

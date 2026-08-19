@@ -118,10 +118,12 @@ async function fetchScan(bridgeUrl: string): Promise<{ symbols: string[]; proble
 
 /** What to actually do about a dead feed, appended to the feed's own message. */
 const FEED_FIX: Partial<Record<string, string>> = {
-  robinhood: ' — start it with: node bridge/robinhood-bridge.mjs',
+  // `npm run dev` starts the bridge, so locally this should not happen; when it
+  // does, the page is almost always a deployed build, where nothing running in
+  // a browser can start a process on your machine.
+  robinhood: ' — `npm run dev` starts it automatically; on a deployed page, run `npm run bridge` yourself',
   replay: ' — a free Basic key from massive.com is enough for this feed',
   massive: ' — this feed needs a real-time plan; try the replay feed for a free one',
-  polygon: ' — this feed needs a real-time full-market plan',
 };
 
 /**
@@ -146,7 +148,6 @@ async function startFeed(s: AppSettings): Promise<void> {
   feed = createFeed(s.feed, {
     apiKey: s.apiKey,
     symbols: list.symbols.length ? list.symbols : CORE_SYMBOLS.slice(0, 25),
-    universe: s.universe,
     bridgeUrl: s.bridgeUrl,
     replaySpeed: s.replaySpeed,
     replayDate: s.replayDate,

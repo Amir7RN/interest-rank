@@ -16,8 +16,11 @@ GET /health                       ->  { ok, provider, ... }
 
 ## Start it (no credentials, works right now)
 
+`npm run dev` already starts this alongside the page, and reuses an existing bridge on port 8787
+rather than starting a second one. To run it on its own:
+
 ```bash
-node bridge/robinhood-bridge.mjs
+npm run bridge        # same as: node bridge/robinhood-bridge.mjs
 ```
 
 That runs the **snapshot** provider against `snapshot.sample.json` — four minutes of real Robinhood

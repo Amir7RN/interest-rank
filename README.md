@@ -4,9 +4,9 @@ A live board that ranks US equities by **attention**, recomputed every second, w
 window analysis and an ensemble majority vote that tells you whether a placement is real or an
 artifact of the smoothing.
 
-Everything runs in the browser: static site, no backend, deployable to GitHub Pages. It ships with a
-built-in market simulator so it works with zero API keys, and swaps to a real feed when you paste a
-key in.
+Everything runs in the browser: static site, no backend, deployable to GitHub Pages. The default feed
+is your own Robinhood account through a local bridge, so it shows real prices without a market-data
+subscription; `npm run dev` starts that bridge for you.
 
 ---
 
@@ -14,9 +14,19 @@ key in.
 
 ```bash
 npm install
-npm run dev        # http://localhost:5173
+npm run dev        # http://localhost:5173 — starts the bridge too
 npm test           # 26 engine + tape tests
 npm run build      # -> dist/
+```
+
+`npm run dev` runs the page **and** the local bridge the default Robinhood feed needs, because a
+board that opens dead with an instruction to go start a second process is not a working default. If a
+bridge is already listening on 8787 it is reused rather than duplicated — the usual cause is one left
+running in another terminal, possibly holding a live token this launcher knows nothing about.
+
+```bash
+npm run dev:web    # page only, no bridge
+npm run bridge     # bridge only
 ```
 
 The board needs ~25 seconds of feed to warm the baselines before it publishes a ranking (the status
@@ -141,12 +151,15 @@ See `src/engine/vote.ts`.
 
 | Feed | Coverage | Key | Notes |
 | --- | --- | --- | --- |
-| **Simulator** | 800 synthetic symbols | none | 3-decade volume dispersion, intraday shape, injected attention events |
+| **Robinhood** *(default)* | watchlist, 10 symbols per call | your own session token | 15-second OHLCV via the local bridge in `bridge/` — no subscription needed |
 | **Massive replay** | watchlist, one request per symbol | free Basic key | a completed session's minute bars played back as a tape — real prints, yesterday |
-| **Robinhood** | watchlist, 10 symbols per call | your own session token | 15-second OHLCV via the local bridge in `bridge/` — no subscription needed |
 | **Massive** | full SIP, `A.*` 1-second aggregates | real-time plan | the right shape for this engine |
-| **Polygon** | full SIP, `A.*` 1-second aggregates | real-time plan | same wire protocol as Massive, different host |
-| **Finnhub** | per-symbol trades, aggregated locally | yes | no wildcard subscribe — watchlist only |
+
+Three sources, all of them real. A synthetic simulator, a Finnhub trade feed, and a Polygon entry
+that was the same wire protocol as Massive on a different host were removed: the first never showed a
+real price, and the other two were choices to make with nothing behind them. The settings panel now
+shows only the fields the selected source actually reads — a key box on a feed that takes no key is
+worse than no box, because it invites you to fill it in and then wonder why nothing changed.
 
 Keys are stored in `localStorage` in your browser and are never sent anywhere except to the vendor's
 own WebSocket or REST endpoint.
@@ -164,10 +177,10 @@ real feed attached.
 
 ### Massive: which tier buys what
 
-Massive is Polygon under the hood — same REST paths, same `wss://.../stocks` protocol, so the
-**Massive** and **Polygon** entries above are one implementation (`src/feeds/sip.ts`) with two hosts.
-The tiers are not interchangeable for this board, and the difference was checked against the live API
-rather than read off a marketing page:
+Massive is Polygon under the hood — same REST paths, same `wss://.../stocks` protocol — so
+`src/feeds/sip.ts` implements the socket once and `massive.ts` supplies the host. The tiers are not
+interchangeable for this board, and the difference was checked against the live API rather than read
+off a marketing page:
 
 | Tier | Live socket | What the REST API returns | Drives this board? |
 | --- | --- | --- | --- |
@@ -213,13 +226,14 @@ Four things to know before reading that board:
 
 Your brokerage account already carries a real-time quote entitlement, so it can drive the board for a
 watchlist at no extra cost. The browser cannot reach Robinhood directly (no CORS, no anonymous
-access), so a small dependency-free Node process bridges it:
+access), so a small dependency-free Node process bridges it. `npm run dev` starts it for you; to run
+it alone:
 
 ```bash
-node bridge/robinhood-bridge.mjs        # replays real recorded bars, no login
+npm run bridge        # replays real recorded bars, no login
 ```
 
-Then pick **Robinhood (local bridge)** as the source. Full setup, including running it against your
+This is the default source. Full setup, including running it against your
 own live session, is in [`bridge/README.md`](bridge/README.md). Three limits are worth knowing before
 you read the board: the finest interval is **15 seconds** (split into 1-second slices, so the
 aggregate is real but the path inside it is interpolated), there is **no quote data** (quote churn is
@@ -262,7 +276,7 @@ changes.
 ## Architecture
 
 ```
-WebSocket feed (SIP 1s aggregates), REST replay tape, or the simulator
+Robinhood bridge (15s bars), REST replay tape, or a SIP 1s WebSocket
    |  bars
 main thread  ──postMessage──▶  Web Worker
                                  |

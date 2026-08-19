@@ -1,40 +1,41 @@
-import { FinnhubFeed } from './finnhub.ts';
 import { MassiveFeed } from './massive.ts';
-import { PolygonFeed } from './polygon.ts';
 import { ReplayFeed } from './replay.ts';
 import { RobinhoodFeed } from './robinhood.ts';
-import { SimFeed } from './sim.ts';
 import type { Feed, FeedOptions } from './types.ts';
 
-export const FEED_IDS = ['sim', 'replay', 'robinhood', 'massive', 'polygon', 'finnhub'] as const;
+export const FEED_IDS = ['robinhood', 'replay', 'massive'] as const;
 export type FeedId = (typeof FEED_IDS)[number];
 
+export const DEFAULT_FEED: FeedId = 'robinhood';
+
 export const FEED_LABEL: Record<FeedId, string> = {
-  sim: 'Simulator (no key)',
+  robinhood: 'Robinhood (live, via bridge)',
   replay: 'Massive replay (free tier, past session)',
-  robinhood: 'Robinhood (local bridge)',
   massive: 'Massive (SIP 1s bars, real-time plan)',
-  polygon: 'Polygon (SIP 1s bars, real-time plan)',
-  finnhub: 'Finnhub (trades, watchlist)',
 };
 
 /** Feeds whose source carries no quote data — the quote-churn weight is dead there. */
-export const FEEDS_WITHOUT_QUOTES: FeedId[] = ['replay', 'robinhood'];
+export const FEEDS_WITHOUT_QUOTES: FeedId[] = ['robinhood', 'replay'];
+
+/** Feeds that need an API key pasted in; the rest hide the field. */
+export const FEEDS_NEEDING_KEY: FeedId[] = ['replay', 'massive'];
+
+/** Feeds that talk to the local bridge rather than straight to a vendor. */
+export const FEEDS_USING_BRIDGE: FeedId[] = ['robinhood'];
+
+/** Narrow an arbitrary stored value to a feed we still ship. */
+export function asFeedId(value: unknown): FeedId {
+  return (FEED_IDS as readonly string[]).includes(value as string) ? (value as FeedId) : DEFAULT_FEED;
+}
 
 export function createFeed(id: FeedId, opts: FeedOptions): Feed {
   switch (id) {
     case 'replay':
       return new ReplayFeed(opts);
-    case 'robinhood':
-      return new RobinhoodFeed(opts);
     case 'massive':
       return new MassiveFeed(opts);
-    case 'polygon':
-      return new PolygonFeed(opts);
-    case 'finnhub':
-      return new FinnhubFeed(opts);
     default:
-      return new SimFeed(opts);
+      return new RobinhoodFeed(opts);
   }
 }
 
