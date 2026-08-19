@@ -271,6 +271,8 @@ function describeAge(ms) {
  * ------------------------------------------------------------------ */
 
 let lastError = null;
+/** Reported on /health: a bridge from yesterday is the likeliest stale dependency. */
+const STARTED_AT = new Date().toISOString();
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
@@ -299,6 +301,11 @@ const server = http.createServer(async (req, res) => {
       token_present: PROVIDER === 'robinhood' ? Boolean(process.env.RH_TOKEN) : undefined,
       scan_file: path.basename(SCAN_FILE),
       scan_present: fs.existsSync(SCAN_FILE),
+      // Long-lived bridges outlive the code that started them. Listing what
+      // this process actually serves lets a caller tell "endpoint missing"
+      // apart from "endpoint broken" without guessing from a 404.
+      endpoints: ['/bars', '/scan', '/health'],
+      started_at: STARTED_AT,
       last_error: lastError,
     });
   }

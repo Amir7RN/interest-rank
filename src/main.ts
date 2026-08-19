@@ -95,6 +95,16 @@ async function fetchScan(bridgeUrl: string): Promise<{ symbols: string[]; proble
   try {
     const res = await fetch(`${base}/scan`, { headers: { accept: 'application/json' } });
     const body = (await res.json().catch(() => ({}))) as ScanResponse;
+    if (res.status === 404) {
+      // A bridge started before /scan existed answers 404 here. That reads as
+      // "the scan is broken" when the truth is "the process on this port is
+      // older than the code you are running", which has a different fix.
+      return {
+        symbols: [],
+        problem: `the bridge at ${base} predates \`/scan\` — restart it (Ctrl-C, then \`npm run dev\`)`,
+        note: null,
+      };
+    }
     if (!res.ok) {
       return { symbols: [], problem: body.error ?? `bridge returned ${res.status} for /scan`, note: null };
     }
