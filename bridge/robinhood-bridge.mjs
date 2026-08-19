@@ -50,6 +50,15 @@ const LOOP = args.loop !== 'false';
 /** Symbol ceiling and inter-batch spacing for the Robinhood provider. */
 const MAX_SYMBOLS = Number(args['max-symbols'] ?? 200);
 const BATCH_DELAY_MS = Number(args['batch-delay'] ?? 150);
+/**
+ * Session window to request. `regular` (09:30–16:00 ET) is the default because
+ * that is the tape the board's time-of-day baselines are built from. Outside
+ * those hours it correctly returns nothing, so `extended` (pre/post) and
+ * `24_5` (overnight) exist for looking at the board when the main session is
+ * closed — thin volume, and the intraday profile will read it as unusual.
+ */
+const BOUNDS = String(args.bounds ?? 'regular');
+const SPAN = String(args.span ?? 'hour');
 
 /* ------------------------------------------------------------------ *
  * Provider: snapshot
@@ -130,7 +139,7 @@ const RH_HISTORICALS = 'https://api.robinhood.com/marketdata/historicals/';
 async function fetchBatch(symbols, token) {
   const url =
     `${RH_HISTORICALS}?symbols=${encodeURIComponent(symbols.join(','))}` +
-    `&interval=15second&span=hour&bounds=regular`;
+    `&interval=15second&span=${encodeURIComponent(SPAN)}&bounds=${encodeURIComponent(BOUNDS)}`;
 
   const res = await fetch(url, {
     headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
@@ -188,6 +197,28 @@ async function robinhoodBars(symbols) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Rough US regular-session test, in market time. Weekday 09:30–16:00 ET.
+ *
+ * Holidays are not encoded — this only decides whether to add a hint to a note,
+ * so being wrong about Thanksgiving costs nothing, and a hardcoded calendar
+ * would go stale silently.
+ */
+function marketOpen(at = new Date()) {
+  const et = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    weekday: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(at);
+  const get = (type) => et.find((p) => p.type === type)?.value ?? '';
+  const day = get('weekday');
+  if (day === 'Sat' || day === 'Sun') return false;
+  const minutes = Number(get('hour')) * 60 + Number(get('minute'));
+  return minutes >= 9 * 60 + 30 && minutes < 16 * 60;
 }
 
 /** Only hand back bars newer than the newest one already delivered per symbol. */
@@ -302,6 +333,8 @@ const server = http.createServer(async (req, res) => {
       interval_sec: INTERVAL_SEC,
       snapshot_file: PROVIDER === 'snapshot' ? path.basename(SNAPSHOT_FILE) : undefined,
       token_present: PROVIDER === 'robinhood' ? Boolean(process.env.RH_TOKEN) : undefined,
+      bounds: PROVIDER === 'robinhood' ? BOUNDS : undefined,
+      span: PROVIDER === 'robinhood' ? SPAN : undefined,
       scan_file: path.basename(SCAN_FILE),
       scan_present: fs.existsSync(SCAN_FILE),
       // Long-lived bridges outlive the code that started them. Listing what
@@ -335,6 +368,11 @@ const server = http.createServer(async (req, res) => {
         bars = onlyNew(await robinhoodBars(symbols));
         const batches = Math.ceil(Math.min(symbols.length, MAX_SYMBOLS) / 10);
         note = `${Math.min(symbols.length, MAX_SYMBOLS)} symbols in ${batches} batches`;
+        // Zero bars from a healthy call almost always means the session is
+        // closed, not that anything is broken. Saying so beats a silent board.
+        if (bars.length === 0 && !marketOpen()) {
+          note += ` — no ${BOUNDS} session data right now (US market is closed; regular hours are 09:30–16:00 ET)`;
+        }
         if (symbols.length > MAX_SYMBOLS) {
           note += ` (watchlist truncated from ${symbols.length}; raise --max-symbols to lift it)`;
         }
