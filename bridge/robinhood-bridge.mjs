@@ -129,6 +129,9 @@ function shiftTime(iso, deltaMs) {
 
 const RH_HISTORICALS = 'https://api.robinhood.com/marketdata/historicals/';
 
+/** Synthesized bars dropped on the most recent poll, reported in the note. */
+let interpolatedDropped = 0;
+
 /**
  * Fetch 15-second bars for up to 10 symbols.
  *
@@ -157,6 +160,17 @@ async function fetchBatch(symbols, token) {
   for (const result of body.results ?? []) {
     const sym = result.symbol;
     for (const b of result.historicals ?? []) {
+      // Robinhood synthesizes gap-filling bars and flags them `interpolated`,
+      // with volume 0 and open == close. They are not observations, and passing
+      // them on is actively harmful: each one tells the engine the ticker is
+      // still trading and folds a zero into its expected-volume baseline, which
+      // lowers the baseline and inflates the next real print's surge score.
+      // Thin sessions are mostly gaps, so this matters most exactly where the
+      // data is weakest.
+      if (b.interpolated) {
+        interpolatedDropped++;
+        continue;
+      }
       out.push({
         sym,
         t: b.begins_at,
@@ -185,6 +199,7 @@ async function robinhoodBars(symbols) {
   const token = process.env.RH_TOKEN;
   if (!token) throw new Error('RH_TOKEN is not set — see bridge/README.md');
 
+  interpolatedDropped = 0;
   const wanted = symbols.slice(0, MAX_SYMBOLS);
   const out = [];
   for (let i = 0; i < wanted.length; i += 10) {
@@ -368,10 +383,15 @@ const server = http.createServer(async (req, res) => {
         bars = onlyNew(await robinhoodBars(symbols));
         const batches = Math.ceil(Math.min(symbols.length, MAX_SYMBOLS) / 10);
         note = `${Math.min(symbols.length, MAX_SYMBOLS)} symbols in ${batches} batches`;
+        if (BOUNDS !== 'regular') note += ` · bounds=${BOUNDS}`;
+        if (interpolatedDropped) note += ` · dropped ${interpolatedDropped} synthesized bars`;
         // Zero bars from a healthy call almost always means the session is
         // closed, not that anything is broken. Saying so beats a silent board.
         if (bars.length === 0 && !marketOpen()) {
-          note += ` — no ${BOUNDS} session data right now (US market is closed; regular hours are 09:30–16:00 ET)`;
+          note +=
+            BOUNDS === 'regular'
+              ? ` — no regular session data right now (US market is closed; regular hours are 09:30–16:00 ET). Try --bounds 24_5 for the overnight session`
+              : ` — no ${BOUNDS} session data right now`;
         }
         if (symbols.length > MAX_SYMBOLS) {
           note += ` (watchlist truncated from ${symbols.length}; raise --max-symbols to lift it)`;
