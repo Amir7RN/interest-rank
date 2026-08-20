@@ -15,7 +15,7 @@ subscription; `npm run dev` starts that bridge for you.
 ```bash
 npm install
 npm run dev        # http://localhost:5173 — starts the bridge too
-npm test           # 26 engine + tape tests
+npm test           # 47 tests
 npm run build      # -> dist/
 ```
 
@@ -146,6 +146,74 @@ See `src/engine/vote.ts`.
   vendor's adjustment feed. Nothing here does that yet.
 
 ---
+
+## The displacement panels
+
+Two panels above the board: names stretched **below** their own trailing mean, and names stretched
+**above** it. They are not a buy list and a sell list, and the naming is deliberate — they report a
+property of the recent past, and calling them BUY/SELL would quietly promote that into a forecast the
+data cannot support.
+
+### Displacement alone is not a signal
+
+A name far below its mean is a bargain if it reverts and a falling knife if it trends. Those are the
+same number. So a row only appears when three things hold at once:
+
+1. **The regime is mean-reverting.** Measured by a variance ratio, not by eyeballing the chart. For a
+   random walk, the variance of a *q*-period return is exactly *q* times the variance of a 1-period
+   return, so `VR(q) = Var[q-period] / (q · Var[1-period])` is 1 under a random walk, below 1 when
+   moves get partly taken back, and above 1 when they extend. Lo & MacKinlay (1988) give its
+   distribution under the random-walk null, so "is this distinguishable from noise" has an answer.
+2. **The reversion can resolve inside a session.** The AR(1) coefficient of deviations gives a
+   half-life; six hours is a real statistic and a useless day trade.
+3. **The expected move clears costs.** Round-trip cost is configurable (default 10 bps) and comes off
+   every edge. Most displacements do not survive this, which is the point — a screen that hides the
+   cost term is selecting for moves too small to trade.
+
+### Why this is a variance ratio and not the autocorrelation it started as
+
+The original idea was to rank on 20- or 50-week autocorrelation. Two corrections got it here.
+Autocorrelation over months describes months, and says essentially nothing about the next thirty
+minutes — the horizon has to match the decision. And autocorrelation is not a direction: it says
+whether a series trends or reverts, never whether it is currently high or low. That makes it the
+right tool for deciding *whether the panel logic applies*, which is what it does here. The variance
+ratio is its better-behaved cousin, aggregating across lags with a known null distribution.
+
+### What it will mostly tell you
+
+Nothing. Equity returns sit close to a random walk at almost every horizon — one of the most
+replicated results in finance — so most names, most of the time, come back `random` and both panels
+sit empty. That is a finding, not a broken screen, and the empty state says so.
+
+The meta line reports how many `reverting` labels a universe of **pure random walks** would have
+produced at the current threshold. Screen 80 names at |z| > 2 and about four come back labelled even
+if every one is noise. The top of a list selected from 80 candidates is exactly where noise collects,
+so that number sits next to the count rather than being left for you to derive.
+
+### The overnight result, and why it is a trap
+
+Replaying real Robinhood overnight bars through the engine:
+
+```
+NVDA   regime=reverting  VR=0.599  LM-z=-2.83  half-life=41s   n=240
+AMD    regime=random     VR=0.748  LM-z=-1.69  half-life=69s   n=216
+TSLA   regime=random     VR=0.774  LM-z=-1.45  half-life=64s   n=197
+```
+
+NVDA's reversion is real in the statistical sense and almost certainly **bid-ask bounce**: in a thin
+book, consecutive prints alternate between the bid and the offer, which shows up as exactly this —
+strong negative autocorrelation at short horizons with a half-life of seconds. It is the best-known
+artifact in market microstructure, and it is not tradeable, because the thing generating the wiggle
+is the spread you would have to pay to capture it.
+
+This is what the cost term is for. It is also why a screen like this is most dangerous exactly where
+it looks most impressive: thin sessions, illiquid names, short horizons.
+
+### What it is not
+
+It is a monitoring and discovery tool. It does not forecast prices, it has no view on any particular
+name, and nothing in it constitutes financial advice. The statistics describe a window of the recent
+past; every decision downstream is yours.
 
 ## Data feeds
 
@@ -311,7 +379,7 @@ forecast horizon) is live and persisted to `localStorage`.
 
 ## Tests
 
-`npm test` runs 26 tests covering the estimators (EWMA convergence, time-decay, z on a surge),
+`npm test` runs 47 tests covering the estimators (EWMA convergence, time-decay, z on a surge),
 window statistics (median/MAD outlier resistance, slope), cross-sectional ranking (fat-tail bounding,
 tie handling), the ensemble vote, the intraday profile, and three end-to-end engine properties: a
 volume surge reaches #1, hysteresis keeps churn under 1 rank/second on pure noise, and the liquidity
@@ -321,6 +389,18 @@ The replay tape has its own suite (`test/tape.test.ts`): session dates walk back
 slicing a whole minute reproduces that minute, volume and trade count are conserved when a minute is
 split, the high and low land in exactly one slice rather than every slice, gaps produce no bar rather
 than a zero-volume one, and a stale cursor does not swallow the first minute when the tape loops.
+
+`test/reversion.test.ts` checks the regime statistics against series whose answer is known by
+construction: a seeded random walk must *not* be labelled, an Ornstein-Uhlenbeck series must come
+back reverting, and returns with positive autocorrelation must come back trending. The random-walk
+case is the load-bearing one — it is a direct test of the Lo-MacKinlay scaling constant, and it
+caught two errors during development. The first divided by *q* twice (the unbiased denominator
+already carries a factor of *q*), which inverted the statistic and reported trending series as
+reverting. The second scaled by `sqrt(N·q)` instead of `sqrt(N)`, inflating every result by `sqrt(q)`
+and turning roughly a third of ordinary random walks into confident regimes. Neither is visible by
+inspection; both are obvious the moment you check that the null behaves like a standard normal.
+Over 300 independent random walks the fixed statistic has mean 0.003, standard deviation 1.021, and
+exceeds |z| > 2 in 4.3% of cases against a theoretical 4.6%.
 
 ## Disclaimer
 

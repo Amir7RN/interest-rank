@@ -99,6 +99,31 @@ const FIELDS: NumField[] = [
   { key: 'horizonSec', label: 'Forecast (s)', min: 5, max: 300, step: 5, hint: 'Horizon for the ensemble forecast' },
   { key: 'minPrice', label: 'Min price ($)', min: 0, max: 100, step: 0.5, hint: 'Liquidity floor — keeps sub-$5 pumps out' },
   { key: 'minAdv', label: 'Min ADV (sh)', min: 0, max: 5_000_000, step: 50_000, hint: 'Average daily volume floor' },
+  {
+    key: 'costBps',
+    label: 'Round-trip cost (bps)',
+    min: 0,
+    max: 200,
+    step: 1,
+    hint: 'Charged against every panel edge. Spread plus fees, there and back — a displacement that cannot pay it is not an opportunity.',
+  },
+  {
+    key: 'regimeZ',
+    label: 'Regime |z|',
+    min: 1,
+    max: 4,
+    step: 0.1,
+    hint: 'How far from a random walk a variance ratio must sit before the regime is called. Higher is stricter and yields fewer names picked out of noise.',
+  },
+  {
+    key: 'maxHalfLifeMin',
+    label: 'Max half-life (min)',
+    min: 1,
+    max: 390,
+    step: 5,
+    hint: 'Hide names whose reversion is too slow to resolve inside a session.',
+  },
+  { key: 'panelRows', label: 'Panel rows', min: 3, max: 25, step: 1, hint: 'Rows per displacement panel' },
 ];
 
 export function mountControls(

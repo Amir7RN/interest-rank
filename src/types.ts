@@ -91,6 +91,14 @@ export interface EngineConfig {
   sortBy: SortBy;
   /** id from HORIZONS — the lookback the change columns and change sorts use */
   sortHorizon: string;
+  /** assumed round-trip cost in basis points, charged against every edge */
+  costBps: number;
+  /** |z| beyond which a variance ratio is called a regime rather than noise */
+  regimeZ: number;
+  /** rows per displacement panel */
+  panelRows: number;
+  /** hide panel rows whose reversion cannot resolve within this many minutes */
+  maxHalfLifeMin: number;
 }
 
 export const DEFAULT_CONFIG: EngineConfig = {
@@ -108,6 +116,10 @@ export const DEFAULT_CONFIG: EngineConfig = {
   horizonSec: 30,
   sortBy: 'score',
   sortHorizon: '1m',
+  costBps: 10,
+  regimeZ: 2,
+  panelRows: 10,
+  maxHalfLifeMin: 60,
 };
 
 export type Prediction = 'UP' | 'HOLD' | 'DOWN';
@@ -152,9 +164,54 @@ export interface RankRow {
   held: boolean;
 }
 
+/** One row of a displacement panel. */
+export interface SignalRow {
+  sym: string;
+  price: number;
+  /** displacement from the trailing mean, in the ticker's own sigma */
+  z: number;
+  /** variance ratio: <1 reverting, >1 trending */
+  vr: number;
+  /** Lo-MacKinlay statistic under the random-walk null */
+  vrZ: number;
+  regime: 'reverting' | 'trending' | 'random';
+  /** seconds for a deviation to decay by half, null when it does not decay */
+  halfLifeSec: number | null;
+  /** signed fractional move if the deviation halves */
+  expectedMove: number;
+  /** that move less assumed round-trip cost; <= 0 is not an opportunity */
+  netEdge: number;
+  /** observations behind the fit */
+  n: number;
+}
+
+/**
+ * The two displacement panels.
+ *
+ * Deliberately not called "buy" and "sell". They list names that are stretched
+ * below and above their own trailing mean *in a regime where that historically
+ * came back*. That is a description of the recent past, not a forecast, and the
+ * naming should not quietly promote it into one.
+ */
+export interface SignalPanels {
+  /** stretched below the mean, ranked by net edge */
+  down: SignalRow[];
+  /** stretched above the mean, ranked by net edge */
+  up: SignalRow[];
+  /** tickers with enough history to fit at all */
+  evaluated: number;
+  /** tickers whose regime was called `reverting` */
+  reverting: number;
+  /** how many of those a pure-noise universe would produce by chance */
+  falseLabels: number;
+  /** assumed round-trip cost as a fraction */
+  costFraction: number;
+}
+
 export interface Snapshot {
   t: number;
   rows: RankRow[];
+  signals: SignalPanels;
   stats: {
     universe: number;
     active: number;

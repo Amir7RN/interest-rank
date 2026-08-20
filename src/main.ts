@@ -1,12 +1,14 @@
 import { createFeed, type Feed, type FeedStatus } from './feeds/index.ts';
 import { CORE_SYMBOLS } from './feeds/universe.ts';
 import { mountControls, loadSettings, type AppSettings } from './ui/controls.ts';
+import { SignalBoard } from './ui/signals.ts';
 import { RankTable } from './ui/table.ts';
 import { horizonById, type FromWorker, type Snapshot, type ToWorker } from './types.ts';
 import './styles.css';
 
 const settings = loadSettings();
 const table = new RankTable(document.getElementById('board')!);
+const signals = new SignalBoard(document.getElementById('signals')!);
 const statusEl = document.getElementById('status')!;
 const clockEl = document.getElementById('clock')!;
 
@@ -42,6 +44,7 @@ worker.onmessage = (ev: MessageEvent<FromWorker>) => {
     lastSnap = msg.snapshot;
     lastSnap.stats.msgsPerSec = Math.round(feedMsgRate);
     table.render(lastSnap);
+    signals.render(lastSnap);
     renderStatus();
   }
 };

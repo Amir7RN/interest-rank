@@ -1,5 +1,6 @@
 import { percentileRank, topK } from './crosssection.ts';
-import { TAPE_MAX_SEC } from './pricehistory.ts';
+import { MID_STEP_SEC, TAPE_MAX_SEC } from './pricehistory.ts';
+import { displacement, edge, expectedFalseLabels, fitRegime } from './reversion.ts';
 import { bucketOf, ProfileStore } from './profile.ts';
 import { TickerState } from './ticker.ts';
 import { predLabel, tally, type Member } from './vote.ts';
@@ -11,6 +12,8 @@ import {
   type EngineConfig,
   type RankRow,
   type SignalKey,
+  type SignalPanels,
+  type SignalRow,
   type Snapshot,
 } from '../types.ts';
 
@@ -23,6 +26,15 @@ const WINDOW_TTL = 600;
 const STALE_LIMIT = 300;
 /** Baseline samples required before a ticker is allowed to rank. */
 const WARMUP = 20;
+/**
+ * Steps between regime refits.
+ *
+ * The series a regime is fitted to only gains a sample every MID_STEP_SEC, so
+ * refitting faster than that is arithmetic on unchanged data. Displacement is
+ * still recomputed every step against the current price — the regime is slow,
+ * where the price sits inside it is not.
+ */
+const REGIME_REFIT_STEPS = MID_STEP_SEC;
 
 export class Engine {
   cfg: EngineConfig = { ...DEFAULT_CONFIG, weights: { ...DEFAULT_CONFIG.weights } };
@@ -80,6 +92,79 @@ export class Engine {
     this.stepNo = 0;
     // Long-horizon changes describe the market, not this run, so they survive a
     // feed restart — refetching them costs a round trip per ten symbols.
+  }
+
+  /**
+   * Build the two displacement panels.
+   *
+   * A name is a candidate only when three things hold at once, and dropping any
+   * one of them is how this kind of screen starts lying:
+   *
+   *   1. Its regime is `reverting` — a variance ratio distinguishable from a
+   *      random walk on the reverting side. Stretched-and-trending is a falling
+   *      knife, and looks identical on displacement alone.
+   *   2. Its reversion can resolve inside the session. A half-life of six hours
+   *      is a real statistic and a useless day trade.
+   *   3. The expected move clears assumed costs. Most displacements do not, and
+   *      a screen that hides this is selecting for names too small to trade.
+   */
+  private buildPanels(act: Int32Array, nActive: number): SignalPanels {
+    const cfg = this.cfg;
+    const costFraction = Math.max(0, cfg.costBps) / 10_000;
+    const panels = emptyPanels(costFraction);
+    const maxHalfLifeSec = Math.max(1, cfg.maxHalfLifeMin) * 60;
+
+    for (let a = 0; a < nActive; a++) {
+      const i = act[a];
+      const s = this.states[i];
+
+      if (s.regime === null || this.stepNo - s.regimeAt >= REGIME_REFIT_STEPS) {
+        s.regime = fitRegime(s.prices.midSeries(), {
+          barSec: MID_STEP_SEC,
+          regimeZ: cfg.regimeZ,
+        });
+        s.regimeAt = this.stepNo;
+      }
+      const fit = s.regime;
+      if (!fit) continue; // still collecting history
+      panels.evaluated++;
+      if (fit.regime !== 'reverting') continue;
+      panels.reverting++;
+
+      if (fit.halfLifeBars === null) continue;
+      const halfLifeSec = fit.halfLifeBars * fit.barSec;
+      if (halfLifeSec > maxHalfLifeSec) continue;
+
+      const disp = displacement(s.price, fit);
+      if (!disp) continue;
+      const e = edge(disp.dev, costFraction);
+      if (e.netEdge <= 0) continue;
+
+      const row: SignalRow = {
+        sym: s.sym,
+        price: s.price,
+        z: disp.z,
+        vr: fit.vr,
+        vrZ: fit.vrZ,
+        regime: fit.regime,
+        halfLifeSec,
+        expectedMove: e.expectedMove,
+        netEdge: e.netEdge,
+        n: fit.n,
+      };
+      (disp.dev < 0 ? panels.down : panels.up).push(row);
+    }
+
+    const byEdge = (x: SignalRow, y: SignalRow) => y.netEdge - x.netEdge;
+    panels.down.sort(byEdge);
+    panels.up.sort(byEdge);
+    panels.down.length = Math.min(panels.down.length, cfg.panelRows);
+    panels.up.length = Math.min(panels.up.length, cfg.panelRows);
+    // How many of the `reverting` labels a universe of pure random walks would
+    // have produced anyway. Shown beside the count, because the top of a list
+    // selected from 80 names is exactly where noise collects.
+    panels.falseLabels = expectedFalseLabels(panels.evaluated, cfg.regimeZ);
+    return panels;
   }
 
   /** Supply changes for a horizon the live tape cannot reach back to. */
@@ -376,6 +461,8 @@ export class Engine {
     }
     chosen.sort((a, b) => this.sortArr[b] - this.sortArr[a]);
 
+    const signals = this.buildPanels(act, nActive);
+
     /* ---- stage 6: emit ---- */
     const rows: RankRow[] = [];
     let churnSum = 0;
@@ -429,6 +516,7 @@ export class Engine {
     return {
       t,
       rows,
+      signals,
       stats: {
         universe: this.states.length,
         active: nActive,
@@ -442,6 +530,10 @@ export class Engine {
       },
     };
   }
+}
+
+function emptyPanels(costFraction: number): SignalPanels {
+  return { down: [], up: [], evaluated: 0, reverting: 0, falseLabels: 0, costFraction };
 }
 
 function blankSignals(n: number): Record<SignalKey, Float64Array<ArrayBuffer>> {

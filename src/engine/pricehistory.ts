@@ -20,6 +20,17 @@
 
 /** Seconds of 1-second-resolution history. */
 export const FAST_SPAN_SEC = 300;
+/**
+ * Seconds between mid-resolution samples, and how many are kept.
+ *
+ * 15 seconds is deliberate: it matches the coarsest native bar interval any
+ * feed here delivers. Feeds that split coarse bars into 1-second slices
+ * interpolate the path between them, so a regime statistic fitted to the fine
+ * ring would measure the interpolation and report near-perfect trending on
+ * every ticker. Sampling at the native interval avoids inventing that structure.
+ */
+export const MID_STEP_SEC = 15;
+export const MID_CAP = 240; // one hour
 /** Seconds between coarse samples. */
 export const SLOW_STEP_SEC = 60;
 /** Number of coarse samples kept — 240 minutes = 4 hours. */
@@ -53,10 +64,19 @@ class Ring {
   get held(): number {
     return Math.min(this.pushes, this.buf.length);
   }
+
+  /** Retained samples, oldest first. */
+  toArray(): Float64Array {
+    const held = this.held;
+    const out = new Float64Array(held);
+    for (let i = 0; i < held; i++) out[i] = this.at(held - 1 - i) as number;
+    return out;
+  }
 }
 
 export class PriceHistory {
   private fast = new Ring(FAST_SPAN_SEC);
+  private mid = new Ring(MID_CAP);
   private slow = new Ring(SLOW_CAP);
   private steps = 0;
 
@@ -64,10 +84,24 @@ export class PriceHistory {
   push(price: number): void {
     if (!(price > 0)) return;
     this.fast.push(price);
+    if (this.steps % MID_STEP_SEC === 0) this.mid.push(price);
     // The first step seeds the coarse ring too, so a lookback slightly longer
     // than the fine ring has something to compare against immediately.
     if (this.steps % SLOW_STEP_SEC === 0) this.slow.push(price);
     this.steps++;
+  }
+
+  /**
+   * Prices at the native bar interval, oldest first — the series regime
+   * statistics must be fitted to. See `MID_STEP_SEC` for why not the fine ring.
+   */
+  midSeries(): Float64Array {
+    return this.mid.toArray();
+  }
+
+  /** Mid-resolution samples held, for "still collecting" reporting. */
+  get midCount(): number {
+    return this.mid.held;
   }
 
   /** Latest recorded price, or null before anything has been recorded. */

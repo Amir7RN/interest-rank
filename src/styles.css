@@ -225,3 +225,31 @@ table.board { width: 100%; border-collapse: collapse; font-variant-numeric: tabu
 /* A change the board cannot know yet — rendered as an em dash, kept quiet so it
    reads as "no answer" rather than as a value. */
 td.chgsel.muted { color: var(--muted); }
+
+/* ---- displacement panels ---- */
+.signals { margin-bottom: 14px; }
+.sig-meta {
+  font-size: 12px; color: var(--muted); margin-bottom: 8px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px;
+}
+.sig-meta .warn { color: #d9a441; }
+.sig-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 900px) { .sig-cols { grid-template-columns: 1fr; } }
+.sig-panel {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 8px; padding: 10px 12px 4px;
+}
+.sig-panel h2 { font-size: 13px; margin: 0; letter-spacing: 0.02em; }
+.sig-sub { font-size: 11px; color: var(--muted); margin: 2px 0 8px; line-height: 1.4; }
+.sig-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.sig-table th {
+  text-align: left; font-weight: 500; color: var(--muted);
+  font-size: 11px; padding: 2px 6px; border-bottom: 1px solid var(--line);
+}
+.sig-table td { padding: 3px 6px; font-variant-numeric: tabular-nums; }
+.sig-table th.num, .sig-table td.num { text-align: right; }
+.sig-table td.sym { font-weight: 600; }
+.sig-empty td {
+  color: var(--muted); font-size: 11px; line-height: 1.5;
+  padding: 8px 6px; text-align: left;
+}

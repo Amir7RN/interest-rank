@@ -1,5 +1,6 @@
 import { Ewma } from './ewma.ts';
 import { PriceHistory } from './pricehistory.ts';
+import type { RegimeFit } from './reversion.ts';
 import { RollingWindow } from './window.ts';
 import { SIGNAL_KEYS, type SignalKey } from '../types.ts';
 
@@ -33,8 +34,12 @@ export class TickerState {
   scoreSmooth: Ewma;
   scoreSlow: Ewma;
 
-  /** price at 1s/1min resolution, for the change-over-horizon sorts */
+  /** price at 1s/15s/1min resolution, for change sorts and regime fits */
   readonly prices = new PriceHistory();
+  /** last fitted regime; refreshed on a stagger, not every step */
+  regime: RegimeFit | null = null;
+  /** engine step at which `regime` was fitted */
+  regimeAt = 0;
 
   /** allocated lazily, only for shortlisted tickers */
   win: RollingWindow | null = null;

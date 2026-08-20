@@ -311,3 +311,83 @@ test('long-horizon changes supplied from outside the tape drive the sort', () =>
   );
   assert.ok(Math.abs((snap.rows[0].chgSel ?? 0) - 0.09) < 1e-9);
 });
+
+/** Deterministic noise, so panel tests fail for real reasons only. */
+function noise(seed: number): () => number {
+  let s = seed >>> 0;
+  return () => {
+    s = (s * 1664525 + 1013904223) >>> 0;
+    return s / 4294967296 - 0.5;
+  };
+}
+
+test('the displacement panel admits a reverting name and refuses a trending one', () => {
+  const engine = new Engine();
+  engine.configure({
+    ...DEFAULT_CONFIG,
+    minPrice: 1,
+    minAdv: 0,
+    windowSec: 30,
+    costBps: 1,
+    maxHalfLifeMin: 600,
+  });
+
+  const n = noise(9);
+  // REV oscillates tightly around 100; TRD walks away with persistent moves.
+  let revPrice = 100;
+  let trdPrice = 100;
+  let drift = 0;
+  let t = Date.parse('2026-08-17T15:00:00Z');
+
+  let snap = engine.step(t);
+  // 70 minutes of one-second steps: enough mid-resolution bars to fit a regime.
+  for (let i = 0; i < 4200; i++) {
+    revPrice += 0.35 * (100 - revPrice) + 0.5 * n();
+    drift = 0.6 * drift + 0.05 * n();
+    trdPrice += drift;
+    engine.ingest([bar('REV', t, revPrice, 5000), bar('TRD', t, trdPrice, 5000)]);
+    snap = engine.step(t);
+    t += 1000;
+  }
+
+  const s = snap.signals;
+  assert.equal(s.evaluated, 2, 'both tickers should have enough history to fit');
+  const listed = [...s.down, ...s.up].map((r) => r.sym);
+  assert.ok(!listed.includes('TRD'), 'a trending name must never reach a reversion panel');
+
+  // Push REV well below its mean and confirm it surfaces on the correct side.
+  for (let i = 0; i < 5; i++) {
+    engine.ingest([bar('REV', t, 96, 5000), bar('TRD', t, trdPrice, 5000)]);
+    snap = engine.step(t);
+    t += 1000;
+  }
+  const down = snap.signals.down.find((r) => r.sym === 'REV');
+  assert.ok(down, `expected REV on the oversold side, got ${JSON.stringify(snap.signals.down)}`);
+  assert.ok(down.z < 0, `displacement should be negative, got ${down.z}`);
+  assert.ok(down.expectedMove > 0, 'expected reversion should point upward');
+  assert.equal(down.regime, 'reverting');
+  assert.ok(down.halfLifeSec !== null && down.halfLifeSec > 0);
+});
+
+test('a panel row must clear its assumed costs', () => {
+  const engine = new Engine();
+  // A round trip of 50% cannot be paid by any realistic displacement.
+  engine.configure({ ...DEFAULT_CONFIG, minPrice: 1, minAdv: 0, windowSec: 30, costBps: 5000 });
+  const n = noise(4);
+  let price = 100;
+  let t = Date.parse('2026-08-17T15:00:00Z');
+  let snap = engine.step(t);
+  for (let i = 0; i < 4200; i++) {
+    price += 0.35 * (100 - price) + 0.5 * n();
+    engine.ingest([bar('REV', t, price, 5000)]);
+    snap = engine.step(t);
+    t += 1000;
+  }
+  for (let i = 0; i < 5; i++) {
+    engine.ingest([bar('REV', t, 96, 5000)]);
+    snap = engine.step(t);
+    t += 1000;
+  }
+  assert.equal(snap.signals.down.length, 0, 'nothing should list when costs swamp the edge');
+  assert.ok(snap.signals.reverting > 0, 'the regime itself is still detected, only the trade is not');
+});
