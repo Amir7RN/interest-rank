@@ -178,7 +178,7 @@ export function mountControls(
       </div>
       <p class="hint" data-sorthint></p>
     </details>
-    <details class="panel" open>
+    <details class="panel">
       <summary>Feed</summary>
       <div class="grid">
         <label class="field"><span>Source</span><select data-feed>${feedOpts}</select></label>
@@ -225,23 +225,34 @@ export function mountControls(
   };
 
   const sortHintEl = root.querySelector<HTMLElement>('[data-sorthint]')!;
+  // One short line on screen, the full reasoning on hover. These caveats matter
+  // but they are read once, and leaving them expanded pushed the board itself
+  // off the page.
   const renderSortHint = () => {
     const h = HORIZONS.find((x) => x.id === settings.config.sortHorizon);
     const offTape = (h?.seconds ?? 0) > 4 * 3600;
-    const parts: string[] = [];
+    const short: string[] = [];
+    const long: string[] = [];
+
     if (offTape) {
-      parts.push(
+      short.push('daily closes, via bridge');
+      long.push(
         'This lookback is longer than the live tape reaches, so it comes from daily closes through the bridge — Robinhood provider only, refreshed every few minutes.',
       );
     } else {
-      parts.push('Measured from the tape this session has seen; rows show — until the board has been open that long.');
-    }
-    if (settings.config.sortBy !== 'score') {
-      parts.push(
-        'Sorting by change bypasses the enter/exit thresholds, which are calibrated for the 0-1 score and mean nothing as a percentage. Expect a livelier list. Robust and Fcst still describe the attention score, not this ordering.',
+      short.push("from this session's tape");
+      long.push(
+        'Measured from the tape this session has seen; rows show an em dash until the board has been open that long.',
       );
     }
-    sortHintEl.textContent = parts.join(' ');
+    if (settings.config.sortBy !== 'score') {
+      short.push('thresholds bypassed');
+      long.push(
+        'Sorting by change bypasses the enter/exit thresholds, which are calibrated for the 0-1 score and mean nothing as a percentage, so expect a livelier list. Robust and Fcst still describe the attention score, not this ordering.',
+      );
+    }
+    sortHintEl.textContent = short.join(' · ');
+    sortHintEl.title = long.join(' ');
   };
   renderSortHint();
 

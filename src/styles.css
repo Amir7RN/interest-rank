@@ -22,6 +22,15 @@ html, body {
   font: 13px/1.45 var(--mono);
 }
 
+/* The board is the product, so it gets the room and its own scrollbar. The
+   page itself does not scroll: header, panels and settings stay put while the
+   ranking moves underneath them. */
+body {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 .topbar {
   display: flex;
   align-items: center;
@@ -29,8 +38,7 @@ html, body {
   padding: 10px 16px;
   border-bottom: 1px solid var(--line);
   background: linear-gradient(180deg, #131a27, #0e131d);
-  position: sticky;
-  top: 0;
+  flex: 0 0 auto;
   z-index: 5;
 }
 
@@ -60,16 +68,40 @@ html, body {
 .dot.error { background: var(--down); }
 @keyframes pulse { 50% { opacity: 0.3; } }
 
+/* Explicit areas, not auto-placement. With three children in a two-column grid,
+   auto-placement put the board in the 340px settings column and gave the
+   settings the wide one — the layout looked deliberate and was not. */
 main {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 340px;
-  gap: 16px;
-  padding: 16px;
-  align-items: start;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas:
+    "signals side"
+    "board   side";
+  gap: 12px;
+  padding: 12px 16px 16px;
+  flex: 1 1 auto;
+  min-height: 0;
 }
-@media (max-width: 1100px) { main { grid-template-columns: minmax(0, 1fr); } }
+.signals { grid-area: signals; }
+.board-wrap { grid-area: board; }
+.side { grid-area: side; }
 
-.board-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+/* Each pane scrolls inside itself rather than pushing the page down. */
+.board-wrap, .side { min-height: 0; overflow: auto; }
+
+@media (max-width: 1100px) {
+  body { overflow: auto; }
+  main {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto auto;
+    grid-template-areas: "signals" "board" "side";
+    min-height: 0;
+  }
+  .board-wrap, .side { overflow: visible; max-height: none; }
+}
+
+.board-wrap { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
 
 table.board { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
 
@@ -148,7 +180,7 @@ table.board { width: 100%; border-collapse: collapse; font-variant-numeric: tabu
 .parts i.sig-quotes { background: #ffc76b; }
 .parts i.sig-range { background: #ff8fa3; }
 
-.side { display: grid; gap: 10px; }
+.side { display: grid; gap: 10px; align-content: start; }
 
 .panel {
   border: 1px solid var(--line);
@@ -253,3 +285,14 @@ td.chgsel.muted { color: var(--muted); }
   color: var(--muted); font-size: 11px; line-height: 1.5;
   padding: 8px 6px; text-align: left;
 }
+
+/* Collapsed state: the meta line alone, so an empty screen costs one row
+   instead of two tables. */
+.sig-collapsed .sig-cols { display: none; }
+.sig-collapsed .sig-meta { margin-bottom: 0; }
+.sig-quiet { color: var(--muted); }
+.sig-meta .sep { margin: 0 6px; opacity: 0.4; }
+
+/* Keep the panels from growing without bound when they do have rows. */
+.sig-panel { max-height: 34vh; overflow: auto; }
+.sig-table thead th { position: sticky; top: 0; background: var(--panel); }

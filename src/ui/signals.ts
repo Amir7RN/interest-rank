@@ -35,6 +35,19 @@ export class SignalBoard {
   render(snap: Snapshot): void {
     const s = snap.signals;
     this.meta.innerHTML = metaLine(s);
+    // Both panels empty is the ordinary case, not an edge case. Two full-height
+    // tables of nothing would push the ranking off the screen to say so, which
+    // is the wrong trade: collapse to a single line until there is something.
+    const empty = s.down.length === 0 && s.up.length === 0;
+    this.root.classList.toggle('sig-collapsed', empty);
+    if (empty) {
+      // The collecting message already explains itself; appending the short
+      // form to it just says the same thing twice on one line.
+      if (s.evaluated > 0) {
+        this.meta.innerHTML += `<span class="sep">·</span><span class="sig-quiet">${quietReason(s)}</span>`;
+      }
+      return;
+    }
     this.fill(this.downBody, s.down, s, 'down');
     this.fill(this.upBody, s.up, s, 'up');
   }
@@ -93,6 +106,13 @@ function metaLine(s: SignalPanels): string {
     `<span class="warn" title="Screening this many names, a universe of pure random walks would produce about this many 'reverting' labels by chance alone">~${noise.toFixed(1)} expected by chance</span>`,
     `costs ${(s.costFraction * 100).toFixed(2)}% round trip`,
   ].join('<span class="sep">·</span>');
+}
+
+/** One line explaining why nothing is listed, for the collapsed state. */
+function quietReason(s: SignalPanels): string {
+  if (s.evaluated === 0) return 'collecting price history';
+  if (s.reverting === 0) return `no mean-reverting regime among ${s.evaluated} fitted`;
+  return 'nothing clears costs';
 }
 
 function emptyReason(s: SignalPanels, side: 'down' | 'up'): string {
