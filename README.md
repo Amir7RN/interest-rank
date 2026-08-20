@@ -215,6 +215,58 @@ It is a monitoring and discovery tool. It does not forecast prices, it has no vi
 name, and nothing in it constitutes financial advice. The statistics describe a window of the recent
 past; every decision downstream is yours.
 
+## Measuring a rule instead of arguing about it
+
+`scripts/backtest.mjs` evaluates the obvious day-trading idea — *it fell, it will bounce* — stated
+precisely enough to be checked:
+
+> When a stock trades **drop%** below its session open, buy. Sell at **target%** above the entry if it
+> gets there, otherwise sell at the close.
+
+```bash
+node bridge/robinhood-bridge.mjs --provider robinhood   # in another terminal
+node scripts/backtest.mjs
+node scripts/backtest.mjs --symbols SNDK,MU,AMD --span 3month --drops 3,5,7 --targets 1,2,3,5
+```
+
+It prints one row per rule, and the columns are chosen to make the usual self-deceptions hard:
+
+| Column | Why it is there |
+| --- | --- |
+| `n` | An average over twenty trades is a rumour, not a result. |
+| `win%` | Deliberately not the headline — a rule can win 80% of the time and still lose money. |
+| `mean%` | Average return per trade, **after** costs. |
+| `sd%` | Why a good-looking mean can be nothing. |
+| `t` | `mean / (sd/√n)`. Below ~2 the edge cannot be told from luck, however pretty the mean. |
+| `n@t=2` | Trades you would need before this result could be believed. Usually the sobering one. |
+| `worst%` | Largest single loss. If one bad trade erases fifty good ones, the average is not the risk. |
+
+Fills are optimistic by construction: the target counts as filled the instant a bar's high touches
+it, with no slippage and no partial fills, and entry is at the trigger bar's close. **Live results
+will be worse than whatever this prints, never better.** A rule that is marginal here is losing in
+practice.
+
+`--file` re-measures a saved `/history` payload without hitting the API again, which is also how the
+arithmetic is tested: a fixture with two triggering sessions and one that never triggers reproduces a
+hand-computed −1.128% mean and −4.26% worst.
+
+### What it said when pointed at the obvious version
+
+Five liquid semis over 21 sessions, buy −5% from the open, sell +2% or at the close:
+
+```
+n=20   win 60%   mean +0.351%   sd 2.305%   t=0.68   worst −6.22%   best +2.00%
+```
+
+Positive, and meaningless: `t = 0.68` needs about 340 trades to reach significance and there were 20.
+Note the shape, which is the real lesson — the best trade is capped at the target while the worst is
+not capped at all, because a losing position is held into the close. The rule caps its winners and
+lets its losers run. Holding every trigger to the close instead averaged **−1.31%**.
+
+The same five names with a +5% target — the version that would actually pay $50 on $1,000 — hit the
+target 30% of the time and averaged **+0.211%**, about two dollars a trade before the edge is
+adjusted for its own uncertainty.
+
 ## Data feeds
 
 | Feed | Coverage | Key | Notes |

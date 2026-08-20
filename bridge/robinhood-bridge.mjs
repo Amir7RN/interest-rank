@@ -67,7 +67,7 @@ const SPAN = String(args.span ?? 'hour');
  * page" apart from "this endpoint is broken", so a second hardcoded copy that
  * silently falls behind defeats the point of having it.
  */
-const ENDPOINTS = ['/bars', '/scan', '/changes', '/health'];
+const ENDPOINTS = ['/bars', '/scan', '/changes', '/history', '/health'];
 
 /* ------------------------------------------------------------------ *
  * Provider: snapshot
@@ -430,6 +430,65 @@ const server = http.createServer(async (req, res) => {
       started_at: STARTED_AT,
       last_error: lastError,
     });
+  }
+
+  if (url.pathname === '/history') {
+    // Raw bars over an arbitrary interval and span, for offline analysis. The
+    // live board never calls this; `scripts/backtest.mjs` does.
+    const symbols = (url.searchParams.get('symbols') ?? '')
+      .split(',')
+      .map((s) => s.trim().toUpperCase())
+      .filter(Boolean)
+      .slice(0, MAX_SYMBOLS);
+    const interval = url.searchParams.get('interval') ?? '5minute';
+    const span = url.searchParams.get('span') ?? 'month';
+    const bounds = url.searchParams.get('bounds') ?? 'regular';
+    if (PROVIDER !== 'robinhood') {
+      return json(res, 200, { bars: {}, note: `history needs --provider robinhood; running ${PROVIDER}` });
+    }
+    try {
+      const token = process.env.RH_TOKEN;
+      if (!token) throw new Error('RH_TOKEN is not set — see bridge/README.md');
+      const out = {};
+      let dropped = 0;
+      for (let i = 0; i < symbols.length; i += 10) {
+        const batch = symbols.slice(i, i + 10);
+        const u =
+          `${RH_HISTORICALS}?symbols=${encodeURIComponent(batch.join(','))}` +
+          `&interval=${encodeURIComponent(interval)}&span=${encodeURIComponent(span)}` +
+          `&bounds=${encodeURIComponent(bounds)}`;
+        const r = await fetch(u, { headers: { authorization: `Bearer ${token}`, accept: 'application/json' } });
+        if (r.status === 401 || r.status === 403) throw new Error('Robinhood rejected the token — refresh RH_TOKEN');
+        if (!r.ok) throw new Error(`Robinhood responded ${r.status} for history`);
+        const body = await r.json();
+        for (const result of body.results ?? []) {
+          out[result.symbol] = (result.historicals ?? [])
+            .filter((b) => {
+              if (b.interpolated) dropped++;
+              return !b.interpolated;
+            })
+            .map((b) => ({
+              t: b.begins_at,
+              o: Number(b.open_price),
+              h: Number(b.high_price),
+              l: Number(b.low_price),
+              c: Number(b.close_price),
+              v: Number(b.volume),
+            }));
+        }
+        if (i + 10 < symbols.length) await sleep(BATCH_DELAY_MS);
+      }
+      const total = Object.values(out).reduce((a, b) => a + b.length, 0);
+      return json(res, 200, {
+        bars: out,
+        note: `${total} bars over ${Object.keys(out).length} symbols · ${interval}/${span}/${bounds}` +
+          (dropped ? ` · dropped ${dropped} synthesized` : ''),
+      });
+    } catch (err) {
+      lastError = String(err.message ?? err);
+      console.error('[history]', lastError);
+      return json(res, 502, { error: lastError, bars: {} });
+    }
   }
 
   if (url.pathname === '/changes') {
